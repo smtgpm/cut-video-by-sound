@@ -1,0 +1,6 @@
+opencv-python
+pillow
+numpy
+librosa
+soundfile
+scipy
