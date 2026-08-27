@@ -10,18 +10,26 @@ from remove_segments import remove_segments
 VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.mkv', '.webm', '.m4v', '.flv', '.wmv', '.mpeg', '.mpg'}
 
 
-def _expand_video_inputs(inputs):
-    videos = []
+def _expand_video_inputs(inputs, out_root):
+    """Return [(video_path, out_dir), ...] with folder inputs mirrored as <name>_cleaned."""
+    jobs = []
+    seen = set()
     for path in inputs:
         if os.path.isdir(path):
-            videos.extend(sorted(
-                os.path.join(path, f) for f in os.listdir(path)
-                if os.path.isfile(os.path.join(path, f))
-                and os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS
-            ))
+            folder_name = os.path.basename(os.path.abspath(path.rstrip(os.sep)))
+            out_dir = os.path.join(out_root, f'{folder_name}_cleaned')
+            for f in sorted(os.listdir(path)):
+                video_path = os.path.join(path, f)
+                if (os.path.isfile(video_path)
+                        and os.path.splitext(f)[1].lower() in VIDEO_EXTENSIONS
+                        and video_path not in seen):
+                    seen.add(video_path)
+                    jobs.append((video_path, out_dir))
         else:
-            videos.append(path)
-    return list(dict.fromkeys(videos))
+            if path not in seen:
+                seen.add(path)
+                jobs.append((path, out_root))
+    return jobs
 
 
 def process_video(video_path, ref_paths, out_dir, args):
@@ -33,57 +41,61 @@ def process_video(video_path, ref_paths, out_dir, args):
                   f'{m.start:.2f}s -> {m.end:.2f}s (score={m.score:.2f})')
             all_segments.append((m.start, m.end))
 
+    os.makedirs(out_dir, exist_ok=True)
     base = os.path.splitext(os.path.basename(video_path))[0]
-    out_path = os.path.join(out_dir, f'{base}_nettoye.mp4')
+    out_path = os.path.join(out_dir, f'{base}_cleaned.mp4')
 
     if all_segments:
         remove_segments(video_path, all_segments, out_path)
     else:
-        print(f'[{os.path.basename(video_path)}] Aucune occurrence trouvée, copie telle quelle.')
+        print(f'[{os.path.basename(video_path)}] No matches found, copying as-is.')
         shutil.copy2(video_path, out_path)
-    print(f'[{os.path.basename(video_path)}] -> écrit : {out_path}')
+    print(f'[{os.path.basename(video_path)}] -> written: {out_path}')
     return out_path
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Supprime des passages sans ré-encoder vidéo ni audio.')
-    parser.add_argument('--refs', required=True, help='Dossier contenant les .wav de référence')
+    parser = argparse.ArgumentParser(description='Remove passages without re-encoding video or audio.')
+    parser.add_argument('--refs', required=True, help='Folder containing reference .wav files')
     parser.add_argument('--videos', nargs='+', required=True,
-                        help='Vidéos et/ou dossiers contenant les vidéos')
-    parser.add_argument('--out', required=True, help='Dossier de sortie')
-    parser.add_argument('--threshold', type=float, default=0.82, help='Seuil de similarité (0-1)')
-    parser.add_argument('--workers', type=int, default=2, help='Nombre de vidéos en parallèle')
+                        help='Videos and/or folders containing videos')
+    parser.add_argument('--out', required=True, help='Output folder')
+    parser.add_argument('--threshold', type=float, default=0.82, help='Similarity threshold (0-1)')
+    parser.add_argument('--workers', type=int, default=2, help='Number of videos in parallel')
     args = parser.parse_args()
 
     ref_paths = sorted(glob.glob(os.path.join(args.refs, '*.wav')))
     if not ref_paths:
-        raise SystemExit(f'Aucun .wav trouvé dans {args.refs}')
+        raise SystemExit(f'No .wav found in {args.refs}')
     os.makedirs(args.out, exist_ok=True)
 
-    videos = _expand_video_inputs(args.videos)
-    if not videos:
-        print('Aucune vidéo trouvée.')
+    jobs = _expand_video_inputs(args.videos, args.out)
+    if not jobs:
+        print('No videos found.')
         return
 
-    print('Mode : COPIE DE FLUX — aucun ré-encodage vidéo/audio.')
-    print('Les coupes sont alignées sur les keyframes pour préserver la qualité et la synchronisation.')
-    print(f'{len(videos)} vidéo(s) à traiter.\n')
+    print('Mode: STREAM COPY — no video/audio re-encoding.')
+    print('Cuts are aligned to keyframes to preserve quality and sync.')
+    print(f'{len(jobs)} video(s) to process.\n')
 
     errors = []
     with ThreadPoolExecutor(max_workers=max(1, args.workers)) as executor:
-        futures = {executor.submit(process_video, v, ref_paths, args.out, args): v for v in videos}
+        futures = {
+            executor.submit(process_video, video, ref_paths, out_dir, args): video
+            for video, out_dir in jobs
+        }
         for future in as_completed(futures):
             video = futures[future]
             try:
                 future.result()
             except Exception as exc:
                 errors.append((video, str(exc)))
-                print(f'[{os.path.basename(video)}] ERREUR : {exc}')
+                print(f'[{os.path.basename(video)}] ERROR: {exc}')
 
     if errors:
-        print(f'\n{len(errors)} vidéo(s) en erreur sur {len(videos)}.')
+        print(f'\n{len(errors)} video(s) failed out of {len(jobs)}.')
     else:
-        print(f'\nTerminé : {len(videos)} vidéo(s) traitée(s) sans erreur.')
+        print(f'\nDone: {len(jobs)} video(s) processed with no errors.')
 
 
 if __name__ == '__main__':

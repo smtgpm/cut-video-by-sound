@@ -1,61 +1,63 @@
 # Video Intro Remover
 
-## Fonctionnement
+## How it works
 
-Le programme détecte les extraits audio de référence puis supprime les passages correspondants des vidéos.
+The program detects reference audio clips, then removes the matching passages from videos.
 
-### Aucune perte de qualité
+### No quality loss
 
-La suppression utilise exclusivement FFmpeg avec `-c copy` :
+Removal uses FFmpeg exclusively with `-c copy`:
 
-- aucune vidéo n'est ré-encodée ;
-- aucun audio n'est ré-encodé ;
-- NVENC/QuickSync/VAAPI/VideoToolbox ne sont pas utilisés ;
-- les flux conservés restent donc tels quels.
+- no video is re-encoded;
+- no audio is re-encoded;
+- NVENC/QuickSync/VAAPI/VideoToolbox are not used;
+- kept streams therefore stay as-is.
 
-Les limites des morceaux sont alignées sur les **keyframes**. La coupe peut donc être légèrement décalée par rapport au timestamp détecté, mais vidéo et audio restent copiés ensemble.
+Segment boundaries are aligned to **keyframes**. The cut may therefore be slightly offset from the detected timestamp, but video and audio remain copied together.
 
 ## Installation
 
-Installer FFmpeg et FFprobe, puis :
+Install FFmpeg and FFprobe, then:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-## 1. Créer les références audio
+## 1. Create audio references
 
 ```bash
 python app_extract.py
 ```
 
-Marquer le début et la fin du générique, puis exporter les extraits `.wav`.
+Mark the start and end of the intro, then export the `.wav` clips.
 
-## 2. Nettoyer les vidéos
+## 2. Clean the videos
 
-Fichiers individuels :
-
-```bash
-python cli_remove.py --refs dossier_refs --videos ep01.mp4 ep02.mp4 --out dossier_sortie
-```
-
-Dossier entier :
+Individual files:
 
 ```bash
-python cli_remove.py --refs dossier_refs --videos saison1 --out dossier_sortie
+python cli_remove.py --refs refs_folder --videos ep01.mp4 ep02.mp4 --out output_folder
 ```
 
-Plusieurs dossiers/fichiers peuvent être mélangés :
+Entire folder (writes into `output/season1_cleaned/`):
 
 ```bash
-python cli_remove.py --refs refs --videos saison1 saison2 special.mp4 --out sortie
+python cli_remove.py --refs refs_folder --videos season1 --out output
 ```
 
-Les dossiers sont parcourus un niveau : seuls les fichiers vidéo directement dedans sont pris.
+Several folders/files can be mixed:
+
+```bash
+python cli_remove.py --refs refs --videos season1 season2 special.mp4 --out output
+```
+
+That creates `output/season1_cleaned/`, `output/season2_cleaned/`, and puts `special_cleaned.mp4` directly in `output/`.
+
+Folders are scanned one level deep: only video files directly inside them are taken.
 
 ## Options
 
-- `--threshold 0.82` : seuil de similarité.
-- `--workers 2` : nombre de vidéos traitées en parallèle.
+- `--threshold 0.82`: similarity threshold.
+- `--workers 2`: number of videos processed in parallel.
 
-Les anciennes options GPU/smart-cut ne sont plus nécessaires : le pipeline est désormais toujours en copie de flux.
+The old GPU/smart-cut options are no longer needed: the pipeline always uses stream copy now.

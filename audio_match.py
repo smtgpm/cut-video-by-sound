@@ -1,18 +1,18 @@
 """
 audio_match.py
-Recherche, dans une vidéo cible, les passages dont l'audio correspond à un
-extrait de référence (ex: le générique d'une série), par similarité de
-caractéristiques audio (chroma) glissée sur toute la piste.
+Search a target video for passages whose audio matches a reference clip
+(e.g. a series intro), using sliding chroma feature similarity over the
+full track.
 
-Optimisation : la corrélation glissée est calculée via FFT (scipy), pas par
-force brute. Complexité O(T log T) au lieu de O(T x Tr), et surtout aucune
-grosse matrice de fenêtres à garder en mémoire (utile pour de longues vidéos
-ou une référence longue). Le GPU n'apporte pas grand chose ici : les données
-audio sont minuscules comparées à la vidéo, le vrai gain GPU est côté
-ré-encodage (voir hwaccel.py / remove_segments.py).
+Optimization: the sliding correlation is computed via FFT (scipy), not by
+brute force. Complexity O(T log T) instead of O(T x Tr), and especially no
+large window matrix kept in memory (useful for long videos or a long
+reference). GPU does not help much here: audio data is tiny compared to
+video; the real GPU win is on the re-encoding side
+(see hwaccel.py / remove_segments.py).
 
-Dépendances Python : numpy, scipy, librosa
-Dépendance externe : ffmpeg (pour extraire l'audio des vidéos)
+Python dependencies: numpy, scipy, librosa
+External dependency: ffmpeg (to extract audio from videos)
 """
 
 import os
@@ -28,13 +28,13 @@ import librosa
 
 @dataclass
 class Match:
-    start: float   # secondes, dans la vidéo cible
+    start: float   # seconds, in the target video
     end: float
-    score: float   # similarité cosinus, 0..1
+    score: float   # cosine similarity, 0..1
 
 
 def extract_audio_to_wav(video_path: str, sr: int = 22050) -> str:
-    """Extrait la piste audio complète d'une vidéo vers un .wav mono temporaire."""
+    """Extract the full audio track from a video to a temporary mono .wav."""
     fd, out_path = tempfile.mkstemp(suffix=".wav")
     os.close(fd)
     cmd = [
@@ -45,12 +45,12 @@ def extract_audio_to_wav(video_path: str, sr: int = 22050) -> str:
     result = subprocess.run(cmd, capture_output=True, text=True)
     if result.returncode != 0:
         raise RuntimeError(
-            f"ffmpeg a échoué sur {video_path}:\n{result.stderr[-800:]}")
+            f"ffmpeg failed on {video_path}:\n{result.stderr[-800:]}")
     return out_path
 
 
 def _chroma_features(y: np.ndarray, sr: int, hop_length: int) -> np.ndarray:
-    """Retourne une matrice (T, 12) de vecteurs chroma, un par frame temporelle."""
+    """Return a (T, 12) matrix of chroma vectors, one per time frame."""
     chroma = librosa.feature.chroma_stft(
         y=y, sr=sr, hop_length=hop_length)  # (12, T)
     return chroma.T.astype(np.float64)  # (T, 12)
@@ -64,11 +64,11 @@ def find_matches(
     sr: int = 22050,
 ) -> List[Match]:
     """
-    Cherche toutes les occurrences de l'audio de ref_wav_path dans la piste audio
-    de target_video_path, par corrélation glissée (FFT) sur des empreintes chroma.
+    Find all occurrences of ref_wav_path's audio in the audio track of
+    target_video_path, using sliding FFT correlation on chroma fingerprints.
 
-    threshold : seuil de similarité cosinus (0 à 1). ~0.8-0.9 pour un générique
-                quasi identique bit à bit ; baisser si le volume/l'encodage varie.
+    threshold: cosine similarity cutoff (0 to 1). ~0.8-0.9 for an intro that
+               is nearly bit-identical; lower if volume/encoding varies.
     """
     y_ref, _ = librosa.load(ref_wav_path, sr=sr, mono=True)
     ref_duration = len(y_ref) / sr
@@ -93,16 +93,16 @@ def find_matches(
 
     n_windows = Tt - Tr + 1
 
-    # --- Produit scalaire glissé, par FFT, un canal chroma à la fois ---
-    # correlate(target[:,c], ref[:,c], mode='valid') donne, pour chaque position i,
-    # sum_k target[i+k, c] * ref[k, c] -- exactement ce qu'il faut sommer sur les
-    # 12 canaux pour obtenir le produit scalaire glissé complet.
+    # --- Sliding dot product, via FFT, one chroma channel at a time ---
+    # correlate(target[:,c], ref[:,c], mode='valid') gives, for each position i,
+    # sum_k target[i+k, c] * ref[k, c] -- exactly what to sum over the
+    # 12 channels to get the full sliding dot product.
     dot = np.zeros(n_windows, dtype=np.float64)
     for c in range(ref_feat.shape[1]):
         dot += correlate(target_feat[:, c],
                          ref_feat[:, c], mode="valid", method="fft")
 
-    # --- Norme de chaque fenêtre cible, via somme cumulée (O(T), pas de boucle par fenêtre) ---
+    # --- Norm of each target window, via cumulative sum (O(T), no per-window loop) ---
     energy_per_frame = np.sum(target_feat**2, axis=1)  # (Tt,)
     cumsum = np.concatenate([[0.0], np.cumsum(energy_per_frame)])  # (Tt+1,)
     window_energy = cumsum[Tr:Tr + n_windows] - cumsum[0:n_windows]
@@ -110,8 +110,8 @@ def find_matches(
 
     scores = dot / (window_norms * ref_norm)
 
-    # Peak picking : garde le meilleur score par voisinage (évite les doublons
-    # autour d'un même vrai match).
+    # Peak picking: keep the best score per neighborhood (avoids duplicates
+    # around the same true match).
     matches = []
     i = 0
     min_gap = max(1, int(Tr * 0.5))

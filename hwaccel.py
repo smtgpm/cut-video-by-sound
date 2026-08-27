@@ -1,7 +1,7 @@
-"""Compatibilité avec l'ancien projet.
+"""Compatibility with the old project.
 
-Le pipeline actuel ne ré-encode volontairement ni la vidéo ni l'audio : il
-utilise FFmpeg en `-c copy`. Les encodeurs GPU ne sont donc pas utilisés.
+The current pipeline intentionally re-encodes neither video nor audio: it
+uses FFmpeg with `-c copy`. GPU encoders are therefore not used.
 """
 from dataclasses import dataclass, field
 from typing import List, Optional
@@ -26,4 +26,4 @@ def get_encoder_profile(prefer='auto', vaapi_device='/dev/dri/renderD128'):
     return SOFTWARE
 
 def describe(profile):
-    return 'Aucun ré-encodage : vidéo + audio copiés avec -c copy'
+    return 'No re-encoding: video + audio copied with -c copy'

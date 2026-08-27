@@ -23,7 +23,7 @@ def _get_duration(video_path):
            '-of', 'default=noprint_wrappers=1:nokey=1', video_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0 or not r.stdout.strip():
-        raise RuntimeError(f'ffprobe n\'a pas pu lire la durée de {video_path}:\n{r.stderr[-1000:]}')
+        raise RuntimeError(f'ffprobe could not read duration of {video_path}:\n{r.stderr[-1000:]}')
     return float(r.stdout.strip())
 
 
@@ -32,7 +32,7 @@ def _keyframe_times(video_path):
            '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', video_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f'ffprobe n\'a pas pu lire les keyframes:\n{r.stderr[-1000:]}')
+        raise RuntimeError(f'ffprobe could not read keyframes:\n{r.stderr[-1000:]}')
     times = []
     for line in r.stdout.splitlines():
         try:
@@ -61,17 +61,17 @@ def _keep_intervals(video_path, segments_to_remove):
 
 def _align_to_keyframes(keep, keyframes, duration):
     if not keyframes:
-        raise RuntimeError('Aucune keyframe trouvée : impossible de couper sans ré-encodage.')
+        raise RuntimeError('No keyframes found: cannot cut without re-encoding.')
     result = []
     for s, e in keep:
-        # Début: première keyframe >= s. Pour 0, conserver le début du fichier.
+        # Start: first keyframe >= s. For 0, keep the beginning of the file.
         if s <= 0.001:
             a = 0.0
         else:
             i = bisect.bisect_left(keyframes, s)
             a = keyframes[i] if i < len(keyframes) else None
 
-        # Fin: dernière keyframe <= e. Pour la fin, conserver la fin du fichier.
+        # End: last keyframe <= e. For the end, keep the end of the file.
         if e >= duration - 0.001:
             b = duration
         else:
@@ -91,7 +91,7 @@ def _stream_copy(video_path, start, end, out_path):
            '-c', 'copy', '-avoid_negative_ts', 'make_zero', out_path]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        raise RuntimeError(f'ffmpeg (copie de flux) a échoué sur [{start:.3f},{end:.3f}]:\n{r.stderr[-1500:]}')
+        raise RuntimeError(f'ffmpeg (stream copy) failed on [{start:.3f},{end:.3f}]:\n{r.stderr[-1500:]}')
 
 
 def _concat(parts, output_path):
@@ -105,26 +105,26 @@ def _concat(parts, output_path):
                '-c', 'copy', '-avoid_negative_ts', 'make_zero', output_path]
         r = subprocess.run(cmd, capture_output=True, text=True)
         if r.returncode != 0:
-            raise RuntimeError(f'ffmpeg a échoué à la concaténation:\n{r.stderr[-1500:]}')
+            raise RuntimeError(f'ffmpeg failed during concatenation:\n{r.stderr[-1500:]}')
 
 
 def remove_segments(video_path: str, segments_to_remove: List[Tuple[float, float]], output_path: str,
                     hw_prefer='auto', vaapi_device='/dev/dri/renderD128', smart_cut=False,
                     min_gop_for_copy=1.0) -> None:
-    # Paramètres conservés pour compatibilité avec l'ancien CLI.
+    # Parameters kept for compatibility with the old CLI.
     del hw_prefer, vaapi_device, smart_cut, min_gop_for_copy
     keep, duration = _keep_intervals(video_path, segments_to_remove)
     if not keep:
-        raise ValueError('Rien à garder : les segments à supprimer couvrent toute la vidéo.')
+        raise ValueError('Nothing to keep: segments to remove cover the entire video.')
     aligned = _align_to_keyframes(keep, _keyframe_times(video_path), duration)
     if not aligned:
-        raise ValueError('Impossible de construire des morceaux valides avec les keyframes.')
+        raise ValueError('Could not build valid pieces from keyframes.')
 
     with tempfile.TemporaryDirectory() as tmp:
         parts = []
         for i, (s, e) in enumerate(aligned):
             p = os.path.join(tmp, f'part_{i:04d}.mp4')
-            print(f'  Copie sans ré-encodage : {s:.3f}s -> {e:.3f}s')
+            print(f'  Stream-copying: {s:.3f}s -> {e:.3f}s')
             _stream_copy(video_path, s, e, p)
             parts.append(p)
         _concat(parts, output_path)
