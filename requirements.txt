@@ -1,6 +1,7 @@
-opencv-python
 pillow
 numpy
 librosa
 soundfile
 scipy
+av>=18.1
+python-vlc
