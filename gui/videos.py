@@ -208,7 +208,11 @@ class VideosPanel(ttk.Frame):
                 samples.append((path, os.path.getmtime(path)))
             except OSError:
                 continue
-        return tuple(samples), threshold, intro_max, bool(self.several.get()), min_match
+        base = (tuple(samples), threshold, intro_max, bool(self.several.get()), min_match)
+        # Only there when a sample has one, so other searches stay comparable.
+        panel = self.app.panels['samples']
+        windows = tuple((path, panel.window(path)) for path, _ in samples if panel.window(path))
+        return base + (windows,) if windows else base
 
     def worker_count(self):
         try:
@@ -252,7 +256,8 @@ class VideosPanel(ttk.Frame):
                 'Searching again replaces the matches you edited. Cuts added by hand are kept. Continue?',
                 parent=self):
             return
-        _samples, threshold, intro_max, several, min_match = settings
+        threshold, intro_max, several, min_match = settings[1:5]
+        windows = dict(settings[5]) if len(settings) > 5 else {}
         # Decided here, on the Tk thread: the workers never read the episodes.
         jobs = {}
         for episode in episodes:
@@ -263,7 +268,7 @@ class VideosPanel(ttk.Frame):
         def work(episode, progress, _log, cancelled):
             paths, kept = jobs[episode.path]
             return scan_video(episode.path, paths, threshold=threshold, intro_max=intro_max,
-                              several_per_sample=several, min_waveform=min_match, keep=kept,
+                              several_per_sample=several, min_waveform=min_match, windows=windows, keep=kept,
                               progress=progress, cancelled=cancelled)
 
         def finished(episode, result, error):

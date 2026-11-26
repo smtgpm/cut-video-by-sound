@@ -157,6 +157,84 @@ def list_samples(folder: str) -> List[str]:
             if name.lower().endswith('.wav')]
 
 
+# ---------- Where each sample is looked for ----------
+# A sample set may say, per sample, where in a video its match must start:
+#   ('first', a, b)  between a and b seconds after the start
+#   ('last', x)      in the last x seconds
+# Samples not listed are looked for anywhere. Kept next to the samples.
+WINDOWS_FILE = 'search-windows.json'
+
+
+def read_windows(folder: str) -> Dict[str, tuple]:
+    """{sample file name: window} for a sample set."""
+    try:
+        with open(os.path.join(folder, WINDOWS_FILE), encoding='utf-8') as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return {}
+    windows = {}
+    for name, window in (data.items() if isinstance(data, dict) else ()):
+        try:
+            windows[name] = check_window(window)
+        except ValueError:
+            continue
+    return windows
+
+
+def write_window(folder: str, name: str, window: tuple | None) -> None:
+    """Set (or with None, remove) the window of one sample of a set."""
+    windows = read_windows(folder)
+    if window is None:
+        windows.pop(name, None)
+    else:
+        windows[name] = check_window(window)
+    path = os.path.join(folder, WINDOWS_FILE)
+    if not windows:
+        if os.path.exists(path):
+            os.unlink(path)
+        return
+    handle, temporary = tempfile.mkstemp(prefix='.windows-', dir=folder)
+    try:
+        with os.fdopen(handle, 'w', encoding='utf-8') as target:
+            json.dump({k: list(v) for k, v in sorted(windows.items())}, target, indent=1)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def window_of(sample: str) -> tuple | None:
+    return read_windows(os.path.dirname(sample)).get(os.path.basename(sample))
+
+
+def check_window(window) -> tuple:
+    kind, *values = window
+    values = [float(v) for v in values]
+    if kind == 'first' and len(values) == 2 and 0 <= values[0] < values[1]:
+        return ('first', *values)
+    if kind == 'last' and len(values) == 1 and values[0] > 0:
+        return ('last', *values)
+    raise ValueError(f'Not a search window: {window!r}')
+
+
+def describe_window(window: tuple | None) -> str:
+    """Where a match may start: 'anywhere', '0–5 s' or 'last 60 s'."""
+    if not window:
+        return 'anywhere'
+    if window[0] == 'first':
+        return f'{window[1]:g}–{window[2]:g} s'
+    return f'last {window[1]:g} s'
+
+
+def window_starts(window: tuple | None, duration: float) -> Tuple[float, float] | None:
+    """The range a match may start in, in seconds, for a video this long."""
+    if not window:
+        return None
+    if window[0] == 'first':
+        return window[1], min(window[2], duration)
+    return max(0.0, duration - window[1]), duration
+
+
 def safe_name(text: str) -> str:
     return re.sub(r'[\\/:*?"<>|\x00-\x1f]+', '_', text).strip(' .')
 
@@ -315,6 +393,7 @@ def scan_video(
     intro_max: float = 180.0,
     several_per_sample: bool = False,
     min_waveform: float = 0.0,
+    windows: Dict[str, tuple] | None = None,
     keep: Sequence[Cut] = (),
     progress: Callable[[float], None] = lambda fraction: None,
     cancelled: Callable[[], bool] = lambda: False,
@@ -328,22 +407,27 @@ def scan_video(
     min_waveform. Matches over a cut in `keep` (cuts already decided on) are
     dropped, or trimmed where they only touch it.
 
+    windows: {sample path: window}, where each sample's match must start
+    (see read_windows); other samples are looked for anywhere.
+
     candidates: every place each sample was heard, untrimmed, so the review
     can move a cut to its sample's next best match.
     """
     if cancelled():
         raise Cancelled()
     target = load_target(video)
+    duration = len(target.samples) / target.sr
     progress(0.3)
 
     cuts: List[Cut] = []
     for number, sample in enumerate(samples):
         if cancelled():
             raise Cancelled()
+        starts = window_starts((windows or {}).get(sample), duration)
         cuts += [
             Cut(m.start, m.end, sample, m.score, m.waveform_score)
             for m in find_matches(sample, video, threshold=threshold,
-                                  intro_max_seconds=intro_max, target=target)
+                                  intro_max_seconds=intro_max, target=target, starts=starts)
             if m.waveform_score >= min_waveform
         ]
         progress(0.3 + 0.7 * (number + 1) / len(samples))

@@ -73,6 +73,8 @@ def _settings_from_json(value):
     if value is None or value == SAVED:
         return value
     samples, *others = value
+    if len(others) == 5:  # search windows
+        others[4] = tuple((path, tuple(window)) for path, window in others[4])
     return (tuple((path, mtime) for path, mtime in samples), *others)
 
 

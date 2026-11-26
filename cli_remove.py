@@ -15,8 +15,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from audio_match import find_matches, load_target
-from pipeline import (DOUBTFUL_WAVEFORM, default_workers, expand_video_inputs, export_video,
-                      plan_outputs, replace_video, replaced_path, settle_cuts)
+from pipeline import (DOUBTFUL_WAVEFORM, default_workers, describe_window, expand_video_inputs,
+                      export_video, plan_outputs, read_windows, replace_video, replaced_path,
+                      settle_cuts, window_starts)
 
 
 def process_video(video_path, ref_paths, out_base, args):
@@ -26,10 +27,13 @@ def process_video(video_path, ref_paths, out_base, args):
         print(f'[{name}] {text}')
 
     target = load_target(video_path)
+    duration = len(target.samples) / target.sr
+    windows = read_windows(args.refs)
     found = []
     for ref in ref_paths:
+        starts = window_starts(windows.get(os.path.basename(ref)), duration)
         for match in find_matches(ref, video_path, threshold=args.threshold,
-                                  intro_max_seconds=args.intro_max, target=target):
+                                  intro_max_seconds=args.intro_max, target=target, starts=starts):
             match.ref = ref
             found.append(match)
     # Chosen over all samples together: the non-overlapping matches with the
@@ -118,6 +122,10 @@ def main():
             return
 
     limit = 'every match that fits' if args.unlimited_extracts else 'one cut per sample'
+    windows = read_windows(args.refs)
+    for ref in refs:
+        if os.path.basename(ref) in windows:
+            print(f'{os.path.basename(ref)}: only matches starting in {describe_window(windows[os.path.basename(ref)])}')
     print(f'{len(jobs)} video(s), {len(refs)} sample(s), threshold {args.threshold:.2f}, '
           f'{limit}, {max(1, args.workers)} at once.\n')
 

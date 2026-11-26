@@ -8,9 +8,11 @@ from gui import dialogs
 from gui.common import (CHECKED, SAMPLE, UNCHECKED, format_time, make_tree,
                         on_check, parse_time, shorten)
 from gui.state import PROJECT
-from pipeline import VIDEO_EXTENSIONS, list_samples, media_info, safe_name, save_sample
+from pipeline import (VIDEO_EXTENSIONS, check_window, describe_window, list_samples, media_info,
+                      read_windows, safe_name, save_sample, window_of, write_window)
 
 REFS = os.path.join(PROJECT, 'refs')
+WHERE = ('Anywhere', 'Starts between', 'Starts in the last')
 
 
 class SamplesPanel(ttk.Frame):
@@ -22,6 +24,7 @@ class SamplesPanel(ttk.Frame):
         self.sets = {}
         self.samples = []
         self.unchecked = set()
+        self.windows = {}  # of the current set: {file name: window}
         self._build()
         self.refresh_sets()
 
@@ -86,11 +89,31 @@ class SamplesPanel(ttk.Frame):
                                       command=lambda: self.app.show('videos'))
         self.next_button.pack(side='right')
 
-        frame, self.tree = make_tree(box, [('length', 'Length', 75, 'e')], heading='Sample', height=4)
+        # Where the selected samples are looked for in each video.
+        row = ttk.Frame(box)
+        row.pack(side='bottom', fill='x', pady=(6, 0))
+        ttk.Label(row, text='Look in').pack(side='left')
+        self.where = tk.StringVar(value=WHERE[0])
+        self.where_box = ttk.Combobox(row, textvariable=self.where, values=WHERE, state='readonly', width=17)
+        self.where_box.pack(side='left', padx=5)
+        self.where_box.bind('<<ComboboxSelected>>', lambda _event: self._show_where())
+        self.where_from, self.where_to = tk.StringVar(value='0'), tk.StringVar(value='5')
+        self.from_entry = ttk.Entry(row, textvariable=self.where_from, width=6)
+        self.dash = ttk.Label(row, text='–')
+        self.to_entry = ttk.Entry(row, textvariable=self.where_to, width=6)
+        self.seconds = ttk.Label(row, text='s')
+        self.apply_where_button = ttk.Button(row, text='Apply', command=self.apply_window, width=6)
+        self.apply_where_button.pack(side='right')
+        self._where_row = row
+        self._show_where()
+
+        frame, self.tree = make_tree(box, [('where', 'Look in', 95, 'w'), ('length', 'Length', 75, 'e')],
+                                     heading='Sample', height=4)
         frame.pack(fill='both', expand=True)
         on_check(self.tree, self.toggle)
         self.tree.bind('<Double-1>', lambda _event: self.listen())
         self.tree.bind('<Delete>', lambda _event: self.delete())
+        self.tree.bind('<<TreeviewSelect>>', lambda _event: self._load_where())
 
     # ---------- Sets ----------
     def refresh_sets(self, select=None):
@@ -114,6 +137,7 @@ class SamplesPanel(ttk.Frame):
     def use_folder(self, folder):
         self.folder = folder
         self.samples = list_samples(folder)
+        self.windows = read_windows(folder)
         self.tree.delete(*self.tree.get_children())
         for index, path in enumerate(self.samples):
             try:
@@ -121,7 +145,7 @@ class SamplesPanel(ttk.Frame):
             except RuntimeError:
                 length = 'unreadable'
                 self.unchecked.add(path)
-            self.tree.insert('', 'end', iid=str(index), values=(length,))
+            self.tree.insert('', 'end', iid=str(index), values=(describe_window(self.window(path)), length))
             self._label(index)
         self.app.changed()
 
@@ -129,6 +153,72 @@ class SamplesPanel(ttk.Frame):
         path = self.samples[index]
         mark = UNCHECKED if path in self.unchecked else CHECKED
         self.tree.item(str(index), text=f'{mark}  {shorten(os.path.splitext(os.path.basename(path))[0], 44)}')
+
+    # ---------- Where to look ----------
+    def window(self, path):
+        """Where this sample is looked for (None: anywhere)."""
+        if os.path.dirname(path) == self.folder:
+            return self.windows.get(os.path.basename(path))
+        return window_of(path)
+
+    def _show_where(self):
+        """Only the fields the chosen kind of window needs."""
+        for widget in (self.from_entry, self.dash, self.to_entry, self.seconds):
+            widget.pack_forget()
+        kind = WHERE.index(self.where.get())
+        if kind == 1:
+            for widget in (self.from_entry, self.dash, self.to_entry, self.seconds):
+                widget.pack(side='left', padx=(0, 3))
+        elif kind == 2:
+            self.to_entry.pack(side='left', padx=(0, 3))
+            self.seconds.pack(side='left')
+
+    def _load_where(self):
+        """Show the window of the first selected sample."""
+        selection = self.tree.selection()
+        if not selection:
+            return
+        window = self.window(self.samples[int(selection[0])])
+        if not window:
+            self.where.set(WHERE[0])
+        elif window[0] == 'first':
+            self.where.set(WHERE[1])
+            self.where_from.set(f'{window[1]:g}')
+            self.where_to.set(f'{window[2]:g}')
+        else:
+            self.where.set(WHERE[2])
+            self.where_to.set(f'{window[1]:g}')
+        self._show_where()
+
+    def apply_window(self):
+        """Give the selected samples the window shown."""
+        paths = [self.samples[int(row)] for row in self.tree.selection()]
+        if not paths:
+            self.app.report('Select one or more samples first.')
+            return
+        kind = WHERE.index(self.where.get())
+        try:
+            if kind == 0:
+                window = None
+            elif kind == 1:
+                window = check_window(('first', float(self.where_from.get()), float(self.where_to.get())))
+            else:
+                window = check_window(('last', float(self.where_to.get())))
+        except ValueError:
+            messagebox.showwarning('Look in', 'Give seconds, with the first number lower than the second.',
+                                   parent=self)
+            return
+        try:
+            for path in paths:
+                write_window(self.folder, os.path.basename(path), window)
+        except OSError as exc:
+            messagebox.showerror('Look in', str(exc), parent=self)
+        selection = self.tree.selection()
+        self.use_folder(self.folder)
+        self.tree.selection_set(selection)
+        where = describe_window(window)
+        self.app.report(f'{len(paths)} sample(s): looked for {"anywhere" if not window else "only starting in " + where}. '
+                        'Search the videos again to use it.')
 
     def selected_samples(self):
         return [path for path in self.samples if path not in self.unchecked]
@@ -278,6 +368,10 @@ class SamplesPanel(ttk.Frame):
             self.app.player.close_media()
         try:
             os.rename(path, new)
+            window = self.windows.get(os.path.basename(path))
+            if window:
+                write_window(self.folder, os.path.basename(path), None)
+                write_window(self.folder, os.path.basename(new), window)
         except OSError as exc:
             messagebox.showerror('Rename sample', str(exc), parent=self)
             return
@@ -305,6 +399,7 @@ class SamplesPanel(ttk.Frame):
             try:
                 os.unlink(path)
                 self.unchecked.discard(path)
+                write_window(os.path.dirname(path), os.path.basename(path), None)
             except OSError as exc:
                 failed.append(f'{os.path.basename(path)}: {exc}')
         if failed:

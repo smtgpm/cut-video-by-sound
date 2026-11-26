@@ -10,7 +10,7 @@ import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
-from typing import List
+from typing import List, Tuple
 
 import librosa
 import numpy as np
@@ -152,6 +152,14 @@ def _spectral_scores(target_feat: np.ndarray, ref_feat: np.ndarray) -> np.ndarra
     return dot / (np.sqrt(np.maximum(energy, 1e-12)) * max(rn, 1e-12))
 
 
+def _only_between(scores: np.ndarray, starts: Tuple[float, float], rate: float) -> np.ndarray:
+    """The scores, with every start outside [low, high] seconds made hopeless."""
+    low, high = max(0, int(starts[0] * rate)), max(0, int(np.ceil(starts[1] * rate)) + 1)
+    masked = np.full_like(scores, -1.0)
+    masked[low:high] = scores[low:high]
+    return masked
+
+
 def _local_peaks(scores: np.ndarray, threshold: float, min_gap: int) -> List[int]:
     if not len(scores):
         return []
@@ -205,12 +213,14 @@ def load_target(video_path: str, sr: int = 16000) -> TargetAudio:
 
 def find_matches(ref_wav_path: str, target_video_path: str, threshold: float = 0.72,
                  sr: int = 16000, intro_max_seconds: float = 180.0, early_bonus: float = 0.02,
-                 target: TargetAudio | None = None) -> List[Match]:
+                 target: TargetAudio | None = None,
+                 starts: Tuple[float, float] | None = None) -> List[Match]:
     """
     Every distinct place where the sample is heard in the video.
 
     Pass `target` (from load_target) to search one video for several samples
-    without decoding its audio again.
+    without decoding its audio again. With `starts` (low, high), in seconds,
+    only matches starting in that range are looked for.
     """
     ref = _load(ref_wav_path, sr)
     ref_duration = len(ref) / sr
@@ -227,6 +237,10 @@ def find_matches(ref_wav_path: str, target_video_path: str, threshold: float = 0
     # Both detectors propose candidates: the waveform finds exact copies, the
     # spectral fingerprint finds copies that were re-encoded differently.
     wave_scores = _corr(target, ref)
+    if starts is not None:
+        # Masked before picking peaks: a stronger copy just outside the range
+        # must not hide the one inside it.
+        wave_scores = _only_between(wave_scores, starts, sr)
     wave_threshold = max(0.55, threshold)
     wave_idx = _local_peaks(
         wave_scores, wave_threshold,
@@ -236,6 +250,8 @@ def find_matches(ref_wav_path: str, target_video_path: str, threshold: float = 0
     rf = _spectral_fingerprint(ref, sr)
     spec_scores = _spectral_scores(tf, rf)
     frame_rate = sr / 256.0
+    if starts is not None:
+        spec_scores = _only_between(spec_scores, starts, frame_rate)
     spec_threshold = max(0.45, threshold - 0.12)
     spec_idx = _local_peaks(
         spec_scores, spec_threshold,
@@ -264,6 +280,8 @@ def find_matches(ref_wav_path: str, target_video_path: str, threshold: float = 0
         if not refined:
             continue
         start, wave_score = refined
+        if starts is not None and not starts[0] - 0.05 <= start / sr <= starts[1] + 0.05:
+            continue  # refinement moved it out of the range
 
         # Spectral score at the refined location, for a detector-independent
         # measure of similarity after re-encoding.

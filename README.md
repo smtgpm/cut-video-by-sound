@@ -79,6 +79,13 @@ Open an episode, find the passage to remove and mark it: `I` at its start,
 Samples are grouped in sets, for example one set per series. Tick the
 samples to search for.
 
+**Look in** (below the list) limits where the selected samples are looked
+for in each video: **Anywhere** (the default), **Starts between** A and B
+seconds (say 0–5 s for an intro that always opens the episode), or **Starts
+in the last** X seconds (for an outro). A match starting elsewhere is
+ignored. The "Look in" column shows each sample's setting. It is saved in
+`search-windows.json` in the set's folder, so the command line uses it too.
+
 Start the sample exactly on the passage, or just inside it. If it begins with
 a bit of the previous scene, episodes where the passage comes right at 0:00
 will not match.
@@ -197,7 +204,8 @@ python cli_remove.py --refs refs/my-series --videos "Season 1" "Season 2" specia
 ```
 
 Every `.wav` file in `--refs` is a sample: the app saves its samples as
-`refs/<set name>/*.wav`, so a set can be used directly. That command creates
+`refs/<set name>/*.wav`, so a set can be used directly, with the "Look in"
+windows set in the app (`search-windows.json` in that folder). That command creates
 `cleaned/Season 1_cleaned/`, `cleaned/Season 2_cleaned/`, and
 `cleaned/special_cleaned.mkv`.
 
@@ -286,6 +294,7 @@ All next to the program, and not part of the repository:
 | Path | What |
 |---|---|
 | `refs/<set>/*.wav` | your samples, one folder per set |
+| `refs/<set>/search-windows.json` | where each sample of the set is looked for, when not anywhere |
 | `sessions/<name>.json` | each session: videos, cuts, review state, samples ticked, settings |
 | `reviews.json` | the videos you validated or sent back, in any session: adding the same file again, even in another session, brings its review back. An entry only applies while the file keeps the same size and date |
 
