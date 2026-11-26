@@ -2,12 +2,13 @@
 
 import os
 import tkinter as tk
-from tkinter import simpledialog, ttk
+from tkinter import ttk
 
 from gui.common import (ACCENT, BORDER, CHECKED, CUT, DISABLED_CUT, FIELD, MUTED, TEXT,
                         UNCHECKED, WARNING, format_time, make_tree, on_check, parse_time, shorten)
 from gui import reviews
 from gui.state import SAVED
+from gui.where import ask_new_sample, phrase
 from pipeline import Cut
 
 NEW_CUT_SECONDS = 10.0
@@ -343,15 +344,21 @@ class ReviewPanel(ttk.Frame):
         if not cut or not episode or self.app.tasks.busy:
             return
         base = os.path.splitext(os.path.basename(cut.sample))[0] if cut.sample else 'cut'
-        name = simpledialog.askstring(
-            'Save as sample', f'Name of the new sample ({cut.end - cut.start:.2f} s, '
-            f'{format_time(cut.start)} – {format_time(cut.end)}):', initialvalue=f'{base}_edited', parent=self)
-        if not name or not name.strip():
-            return
         samples = self.app.panels['samples']
-        samples.add_sample(episode.path, cut.start, cut.end, name.strip(), saved=lambda _path: self.app.report(
-            f'{os.path.basename(_path)} saved and ticked. "↻ Re-scan now" searches this video with it '
-            '(tick "Keep selected samples" to keep the cuts you already have).'))
+        # Starts from where the original sample is looked for.
+        answer = ask_new_sample(
+            self, 'Save as sample',
+            f'New sample of the set "{os.path.basename(samples.folder)}": {cut.end - cut.start:.2f} s, '
+            f'{format_time(cut.start)} – {format_time(cut.end)} of {episode.name}.',
+            f'{base}_edited', samples.window(cut.sample) if cut.sample else None)
+        if not answer:
+            return
+        name, window = answer
+        samples.add_sample(episode.path, cut.start, cut.end, name, window=window,
+                           saved=lambda path: self.app.report(
+                               f'{os.path.basename(path)} saved and ticked, looked for {phrase(window)}. '
+                               '"↻ Re-scan now" searches this video with it (tick "Keep selected samples" '
+                               'to keep the cuts you already have).'))
 
     def _done_with(self, episode, finished_text):
         """Save the decision, then open the next video still to review."""

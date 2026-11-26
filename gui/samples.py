@@ -5,14 +5,14 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from gui import dialogs
+from gui.where import WhereField, phrase
 from gui.common import (CHECKED, SAMPLE, UNCHECKED, format_time, make_tree,
                         on_check, parse_time, shorten)
 from gui.state import PROJECT
-from pipeline import (VIDEO_EXTENSIONS, check_window, describe_window, list_samples, media_info,
+from pipeline import (VIDEO_EXTENSIONS, describe_window, list_samples, media_info,
                       read_windows, safe_name, save_sample, window_of, write_window)
 
 REFS = os.path.join(PROJECT, 'refs')
-WHERE = ('Anywhere', 'Starts between', 'Starts in the last')
 
 
 class SamplesPanel(ttk.Frame):
@@ -57,6 +57,9 @@ class SamplesPanel(ttk.Frame):
         self.length.grid(row=0, column=4, rowspan=2, padx=8)
         ttk.Label(grid, text='Name', width=7).grid(row=2, column=0, sticky='w')
         ttk.Entry(grid, textvariable=self.name, width=13).grid(row=2, column=1, pady=2)
+        ttk.Label(grid, text='Look in', width=7).grid(row=3, column=0, sticky='w')
+        self.new_where = WhereField(grid)
+        self.new_where.grid(row=3, column=1, columnspan=4, sticky='w', pady=2)
 
         ttk.Label(box, style='Muted.TLabel', wraplength=480, justify='left',
                   text='Tip: start exactly on the intro or just inside it. With even a little of '
@@ -93,19 +96,9 @@ class SamplesPanel(ttk.Frame):
         row = ttk.Frame(box)
         row.pack(side='bottom', fill='x', pady=(6, 0))
         ttk.Label(row, text='Look in').pack(side='left')
-        self.where = tk.StringVar(value=WHERE[0])
-        self.where_box = ttk.Combobox(row, textvariable=self.where, values=WHERE, state='readonly', width=17)
-        self.where_box.pack(side='left', padx=5)
-        self.where_box.bind('<<ComboboxSelected>>', lambda _event: self._show_where())
-        self.where_from, self.where_to = tk.StringVar(value='0'), tk.StringVar(value='5')
-        self.from_entry = ttk.Entry(row, textvariable=self.where_from, width=6)
-        self.dash = ttk.Label(row, text='–')
-        self.to_entry = ttk.Entry(row, textvariable=self.where_to, width=6)
-        self.seconds = ttk.Label(row, text='s')
-        self.apply_where_button = ttk.Button(row, text='Apply', command=self.apply_window, width=6)
-        self.apply_where_button.pack(side='right')
-        self._where_row = row
-        self._show_where()
+        self.where = WhereField(row)
+        self.where.pack(side='left', padx=5)
+        ttk.Button(row, text='Apply', command=self.apply_window, width=6).pack(side='right')
 
         frame, self.tree = make_tree(box, [('where', 'Look in', 95, 'w'), ('length', 'Length', 75, 'e')],
                                      heading='Sample', height=4)
@@ -161,34 +154,11 @@ class SamplesPanel(ttk.Frame):
             return self.windows.get(os.path.basename(path))
         return window_of(path)
 
-    def _show_where(self):
-        """Only the fields the chosen kind of window needs."""
-        for widget in (self.from_entry, self.dash, self.to_entry, self.seconds):
-            widget.pack_forget()
-        kind = WHERE.index(self.where.get())
-        if kind == 1:
-            for widget in (self.from_entry, self.dash, self.to_entry, self.seconds):
-                widget.pack(side='left', padx=(0, 3))
-        elif kind == 2:
-            self.to_entry.pack(side='left', padx=(0, 3))
-            self.seconds.pack(side='left')
-
     def _load_where(self):
         """Show the window of the first selected sample."""
         selection = self.tree.selection()
-        if not selection:
-            return
-        window = self.window(self.samples[int(selection[0])])
-        if not window:
-            self.where.set(WHERE[0])
-        elif window[0] == 'first':
-            self.where.set(WHERE[1])
-            self.where_from.set(f'{window[1]:g}')
-            self.where_to.set(f'{window[2]:g}')
-        else:
-            self.where.set(WHERE[2])
-            self.where_to.set(f'{window[1]:g}')
-        self._show_where()
+        if selection:
+            self.where.set(self.window(self.samples[int(selection[0])]))
 
     def apply_window(self):
         """Give the selected samples the window shown."""
@@ -196,17 +166,10 @@ class SamplesPanel(ttk.Frame):
         if not paths:
             self.app.report('Select one or more samples first.')
             return
-        kind = WHERE.index(self.where.get())
         try:
-            if kind == 0:
-                window = None
-            elif kind == 1:
-                window = check_window(('first', float(self.where_from.get()), float(self.where_to.get())))
-            else:
-                window = check_window(('last', float(self.where_to.get())))
-        except ValueError:
-            messagebox.showwarning('Look in', 'Give seconds, with the first number lower than the second.',
-                                   parent=self)
+            window = self.where.get()
+        except ValueError as exc:
+            messagebox.showwarning('Look in', str(exc), parent=self)
             return
         try:
             for path in paths:
@@ -216,8 +179,7 @@ class SamplesPanel(ttk.Frame):
         selection = self.tree.selection()
         self.use_folder(self.folder)
         self.tree.selection_set(selection)
-        where = describe_window(window)
-        self.app.report(f'{len(paths)} sample(s): looked for {"anywhere" if not window else "only starting in " + where}. '
+        self.app.report(f'{len(paths)} sample(s) now looked for {phrase(window)}. '
                         'Search the videos again to use it.')
 
     def selected_samples(self):
@@ -317,26 +279,43 @@ class SamplesPanel(ttk.Frame):
         except ValueError as exc:
             messagebox.showwarning('Save sample', str(exc), parent=self)
             return
-        self.add_sample(self.video, start, end, self.name.get())
+        try:
+            window = self.new_where.get()
+        except ValueError as exc:
+            messagebox.showwarning('Save sample', str(exc), parent=self)
+            return
+        self.add_sample(self.video, start, end, self.name.get(), window=window)
 
-    def add_sample(self, video, start, end, name, saved=None):
-        """Save [start, end) of the video as a sample of the current set, ticked."""
+    def add_sample(self, video, start, end, name, saved=None, window=None):
+        """Save [start, end) of the video as a sample of the current set, ticked, looked for in window."""
         folder = self.folder
 
         def work(_item, _progress, _log, _cancelled):
-            return save_sample(video, start, end, folder, name)
+            path = save_sample(video, start, end, folder, name)
+            if window:
+                write_window(folder, os.path.basename(path), window)
+            return path
+
+        result = {}
 
         def finished(_item, path, error):
             if error:
                 messagebox.showerror('Save sample', str(error), parent=self)
                 return
             self.refresh_sets(folder)
-            self.app.report(f'Saved {os.path.basename(path)} ({end - start:.2f} s) '
-                            f'in the sample set "{os.path.basename(folder)}".')
+            result['path'] = path
+
+        def done(_cancelled):
+            # After the job's own "finished", which would hide this.
+            path = result.get('path')
+            if not path:
+                return
+            self.app.report(f'Saved {os.path.basename(path)} ({end - start:.2f} s) in the sample set '
+                            f'"{os.path.basename(folder)}", looked for {phrase(window)}.')
             if saved:
                 saved(path)
 
-        self.app.run('Saving sample', [video], work, 1, finished)
+        self.app.run('Saving sample', [video], work, 1, finished, done)
 
     # ---------- Managing ----------
     def current(self):

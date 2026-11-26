@@ -79,11 +79,12 @@ Open an episode, find the passage to remove and mark it: `I` at its start,
 Samples are grouped in sets, for example one set per series. Tick the
 samples to search for.
 
-**Look in** (below the list) limits where the selected samples are looked
-for in each video: **Anywhere** (the default), **Starts between** A and B
-seconds (say 0–5 s for an intro that always opens the episode), or **Starts
-in the last** X seconds (for an outro). A match starting elsewhere is
-ignored. The "Look in" column shows each sample's setting. It is saved in
+**Look in** limits where a sample is looked for in each video. Set it when
+creating the sample (next to its name), later for the selected samples (below
+the list, then Apply), or when saving a cut from the review. The choices:
+**Anywhere** (the default), **Starts between** A and B seconds (say 0–5 s for
+an intro that always opens the episode), or **Starts in the last** X seconds
+(for an outro). A match starting elsewhere is ignored. The "Look in" column shows each sample's setting. It is saved in
 `search-windows.json` in the set's folder, so the command line uses it too.
 
 Start the sample exactly on the passage, or just inside it. If it begins with
@@ -146,7 +147,9 @@ unticked, and overlapping ticked cuts are flagged.
   junction as it will be.
 - "+ Add cut at playhead" adds a cut by hand.
 - **Save as sample…** saves the selected cut, as you adjusted it, as a new
-  sample of the current set (ticked), for example a longer outro.
+  sample of the current set (ticked), for example a longer outro. It asks
+  for its name and where to look for it, starting from the original
+  sample's "Look in".
 Then decide:
 
 - **✓ Validate, reviewed**: the cuts are right. The video is saved with its
