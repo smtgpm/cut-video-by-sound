@@ -8,7 +8,7 @@ from gui.common import (ACCENT, BORDER, CHECKED, CUT, DISABLED_CUT, FIELD, MUTED
                         UNCHECKED, WARNING, format_time, make_tree, on_check, parse_time, shorten)
 from gui import reviews
 from gui.state import SAVED
-from gui.where import ask_new_sample, extension_phrase, phrase
+from gui.where import ask_new_sample, ask_time_cut, extension_phrase, phrase
 from pipeline import Cut, extend_cuts
 
 NEW_CUT_SECONDS = 10.0
@@ -229,8 +229,10 @@ class ReviewPanel(ttk.Frame):
 
         row = ttk.Frame(bottom)
         row.pack(fill='x')
-        self.add_button = ttk.Button(row, text='+ Add cut at playhead', command=self.add)
+        self.add_button = ttk.Button(row, text='+ Cut at playhead', command=self.add)
         self.add_button.pack(side='left')
+        self.time_button = ttk.Button(row, text='+ Cut by time…', command=self.cut_by_time)
+        self.time_button.pack(side='left', padx=(5, 0))
         self.sample_button = ttk.Button(row, text='Save as sample…', command=self.save_as_sample)
         self.sample_button.pack(side='left', padx=5)
         self.next_match_button = ttk.Button(row, text='⇄ Next best match', command=self.next_match)
@@ -470,6 +472,7 @@ class ReviewPanel(ttk.Frame):
             control.config(state=state)
         self.toggle_button.config(text='Untick' if cut and cut.enabled else 'Tick')
         self.add_button.config(state='normal' if self.episode and not busy else 'disabled')
+        self.time_button.config(state='normal' if self.episode and not busy else 'disabled')
         more = cut and self.episode and len(self.episode.alternatives(cut)) > 1 and not busy
         self.next_match_button.config(state='normal' if more else 'disabled')
         self.sample_button.config(state='normal' if cut and not busy else 'disabled')
@@ -576,6 +579,47 @@ class ReviewPanel(ttk.Frame):
         self._edited()
         self.app.report('Cut added. Drag its end in the box below, or move the playhead there and press O.')
 
+    def cut_by_time(self):
+        """A cut of the first or last seconds of this video, or of every video still to review."""
+        if not self.episode or self.app.tasks.busy:
+            return
+        others = [e for e in self.visible() if e is not self.episode]
+        answer = ask_time_cut(self, len(others))
+        if not answer:
+            return
+        side, seconds, everywhere = answer
+        added, too_short, here = 0, 0, None
+        targets = [self.episode] + (others if everywhere else [])
+        for episode in targets:
+            duration = episode.duration
+            if seconds >= duration - MIN_CUT:
+                too_short += 1  # nothing would be left of it
+                continue
+            start, end = (0.0, seconds) if side == 'first' else (duration - seconds, duration)
+            # Added by hand: kept when the video is searched again.
+            cut = next((c for c in episode.cuts if not c.sample and abs(c.start - start) < 0.01
+                        and abs(c.end - end) < 0.01), None)
+            if cut is None:
+                cut = Cut(start, end, edited=True)
+                episode.cuts.append(cut)
+                added += 1
+            if episode is self.episode:
+                here = cut
+            self._edited(episode)
+        if here:
+            self.select_cut(here)
+        part = f'{side} {seconds:g} s'
+        skipped = (f' {too_short} video{"s" * (too_short != 1)} not longer than that left alone.'
+                   if too_short else '')
+        if added:
+            where = f'on {added} video{"s" * (added != 1)}' if everywhere else 'on this video'
+            self.app.report(f'Cut of the {part} added {where}. It stays when the video is searched again.{skipped}')
+        elif too_short == len(targets):
+            self.app.report(f'Nothing added: {"this video is not" if len(targets) == 1 else "no video is"} '
+                            f'longer than {seconds:g} s.')
+        else:
+            self.app.report(f'Nothing added: the {part} were already cut.{skipped}')
+
     def next_match(self):
         """Move the selected cut to the next place its sample was heard, best first, then round."""
         cut, episode = self.cut, self.episode
@@ -608,8 +652,8 @@ class ReviewPanel(ttk.Frame):
             self.cut = None
             self._edited()
 
-    def _edited(self):
-        episode = self.episode
+    def _edited(self, episode=None):
+        episode = episode or self.episode
         episode.cuts.sort(key=lambda cut: cut.start)
         episode.output, episode.junctions = '', []
         count = len(episode.segments)

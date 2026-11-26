@@ -70,46 +70,67 @@ def extract_audio(video_path: str, sr: int = 16000) -> np.ndarray:
         raise RuntimeError(
             f'ffmpeg audio extraction failed:\n{r.stderr.decode(errors="replace")[-1600:]}')
     pcm = np.frombuffer(r.stdout, dtype='<i2')
-    return _normalise((pcm * np.float32(1 / 32768)).astype(np.float64))
+    del r
+    # float32: an hour of audio is 230 MB instead of 460 MB, and every array
+    # computed from it is halved too. Sums that need more precision are done
+    # in float64 (see _normalise and _corr).
+    return _normalise(pcm * np.float32(1 / 32768))
 
 
 def _load(path: str, sr: int) -> np.ndarray:
     y, _ = librosa.load(path, sr=sr, mono=True)
-    return _normalise(np.asarray(y, dtype=np.float64))
+    return _normalise(np.array(y, dtype=np.float32))
 
 
 def _normalise(y: np.ndarray) -> np.ndarray:
     if y.size:
-        y -= np.mean(y)
-        scale = np.sqrt(np.mean(y * y))
+        y -= y.dtype.type(np.mean(y, dtype=np.float64))
+        # Squares summed in float64, a few million at a time.
+        squares = sum(float(np.dot(part, part)) for part in
+                      (y[i:i + (1 << 22)].astype(np.float64) for i in range(0, y.size, 1 << 22)))
+        scale = np.sqrt(squares / y.size)
         if scale > 1e-10:
-            y /= scale
+            y /= y.dtype.type(scale)
     return y
 
 
 def _corr(target: np.ndarray, ref: np.ndarray) -> np.ndarray:
+    """
+    Normalised correlation of ref at every position in target, in float32.
+    Computed in float64, a few million positions at a time, so an hour-long
+    video never needs its whole score array in float64 (460 MB) at once.
+    """
     n = len(ref)
     if n < 2 or len(target) < n:
-        return np.empty(0, dtype=np.float64)
-    ref = ref - np.mean(ref)
-    rn = np.linalg.norm(ref)
+        return np.empty(0, dtype=np.float32)
+    ref = ref.astype(np.float64)
+    ref -= np.mean(ref)
+    rn = float(np.linalg.norm(ref))
+    count = len(target) - n + 1
     if rn < 1e-12:
-        return np.zeros(len(target) - n + 1)
-    # Overlap-add: same result as one huge FFT, in a fraction of the memory.
+        return np.zeros(count, dtype=np.float32)
+    reversed_ref = ref[::-1].copy()
+    out = np.empty(count, dtype=np.float32)
+    step = max(1 << 22, n)
     with sp_fft.set_workers(FFT_WORKERS):
-        dot = oaconvolve(target, ref[::-1], mode='valid')
-    # In place, as each of these arrays is about 170 MB for an episode.
-    cs = np.empty(len(target) + 1)
-    cs[0] = 0.0
-    np.multiply(target, target, out=cs[1:])
-    np.cumsum(cs, out=cs)
-    energy = cs[n:] - cs[:-n]
-    del cs
-    np.maximum(energy, 1e-12, out=energy)
-    np.sqrt(energy, out=energy)
-    energy *= rn
-    dot /= energy
-    return dot
+        for first in range(0, count, step):
+            last = min(count, first + step)
+            part = target[first:last + n - 1].astype(np.float64)
+            # Overlap-add: same result as one huge FFT, in a fraction of the memory.
+            dot = oaconvolve(part, reversed_ref, mode='valid')
+            part *= part
+            sums = np.empty(len(part) + 1)
+            sums[0] = 0.0
+            np.cumsum(part, out=sums[1:])
+            energy = sums[n:] - sums[:-n]
+            del part, sums
+            # Silence scores 0: rounding noise divided by nothing is not a match.
+            quiet = energy < n * 1e-6
+            np.sqrt(np.maximum(energy, 1e-12, out=energy), out=energy)
+            dot /= energy * rn
+            dot[quiet] = 0.0
+            out[first:last] = dot
+    return out
 
 
 def _spectral_fingerprint(y: np.ndarray, sr: int) -> np.ndarray:
@@ -155,9 +176,9 @@ def _spectral_scores(target_feat: np.ndarray, ref_feat: np.ndarray) -> np.ndarra
 def _only_between(scores: np.ndarray, starts: Tuple[float, float], rate: float) -> np.ndarray:
     """The scores, with every start outside [low, high] seconds made hopeless."""
     low, high = max(0, int(starts[0] * rate)), max(0, int(np.ceil(starts[1] * rate)) + 1)
-    masked = np.full_like(scores, -1.0)
-    masked[low:high] = scores[low:high]
-    return masked
+    scores[:low] = -1.0  # in place: the scores are this search's own
+    scores[high:] = -1.0
+    return scores
 
 
 def _local_peaks(scores: np.ndarray, threshold: float, min_gap: int) -> List[int]:

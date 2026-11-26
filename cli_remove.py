@@ -15,9 +15,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from audio_match import find_matches, load_target
-from pipeline import (DOUBTFUL_WAVEFORM, default_workers, describe_extension, describe_window,
+from pipeline import (DOUBTFUL_WAVEFORM, INTRO_MAX, MEMORY, default_workers, describe_extension, describe_window,
                       expand_video_inputs, export_video, extend_cuts, media_info, plan_outputs, read_extensions,
-                      read_windows, replace_video, replaced_path, settle_cuts, window_starts)
+                      read_windows, replace_video, replaced_path, search_memory, settle_cuts, window_starts)
 
 
 def process_video(video_path, ref_paths, out_base, args):
@@ -26,16 +26,19 @@ def process_video(video_path, ref_paths, out_base, args):
     def say(text):
         print(f'[{name}] {text}')
 
-    target = load_target(video_path)
-    duration = len(target.samples) / target.sr
-    windows = read_windows(args.refs)
-    found = []
-    for ref in ref_paths:
-        starts = window_starts(windows.get(os.path.basename(ref)), duration)
-        for match in find_matches(ref, video_path, threshold=args.threshold,
-                                  intro_max_seconds=args.intro_max, target=target, starts=starts):
-            match.ref = ref
-            found.append(match)
+    # Waits while the videos already being searched leave too little memory.
+    with MEMORY.reserve(search_memory(media_info(video_path)[0])):
+        target = load_target(video_path)
+        duration = len(target.samples) / target.sr
+        windows = read_windows(args.refs)
+        found = []
+        for ref in ref_paths:
+            starts = window_starts(windows.get(os.path.basename(ref)), duration)
+            for match in find_matches(ref, video_path, threshold=args.threshold,
+                                      intro_max_seconds=INTRO_MAX, target=target, starts=starts):
+                match.ref = ref
+                found.append(match)
+        del target
     # Chosen over all samples together: the non-overlapping matches with the
     # highest total score. So an intro also heard in the outro cannot take the
     # copy inside the outro.
@@ -90,11 +93,9 @@ def main():
     parser.add_argument('--yes', action='store_true', help='With --in-place: do not ask for confirmation')
     parser.add_argument('--threshold', type=float, default=0.72,
                         help='Match threshold, higher is stricter (default: %(default)s)')
-    parser.add_argument('--intro-max', type=float, default=180.0,
-                        help='Seconds in which an intro is expected, only used to rank close candidates (default: %(default)s)')
     parser.add_argument('--workers', type=int, default=default_workers(),
-                        help='Videos processed in parallel (default: %(default)s on this machine, '
-                             'about 1.3 GB of RAM each)')
+                        help='Videos processed in parallel at most (default: %(default)s on this machine). '
+                             'Fewer run at once when free memory is short: about 1 GB per hour of video.')
     parser.add_argument('--unlimited-extracts', action='store_true', default=False,
                         help='Allow several cuts per sample in a video')
     args = parser.parse_args()

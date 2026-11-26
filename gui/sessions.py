@@ -132,8 +132,7 @@ def snapshot(app):
         'version': VERSION,
         'browse_dir': app.browse_dir,
         'samples': {'folder': samples.folder, 'unticked': sorted(samples.unchecked)},
-        'search': {'threshold': videos.threshold.get(), 'intro_max': videos.intro_max.get(),
-                   'min_match': videos.min_match.get(), 'several': bool(videos.several.get()),
+        'search': {'threshold': videos.threshold.get(), 'min_match': videos.min_match.get(), 'several': bool(videos.several.get()),
                    'workers': videos.workers.get()},
         'export': {'folder': export.folder.get(), 'in_place': bool(export.in_place.get()),
                    'copy_untouched': bool(export.copy_untouched.get()),
@@ -159,7 +158,7 @@ def apply(app, data):
     """Put a session's content in the app. Returns (missing, changed) video counts."""
     samples, videos, export = app.panels['samples'], app.panels['videos'], app.panels['export']
     app.browse_dir = data.get('browse_dir') or app.browse_dir
-    for variable, key in ((videos.threshold, 'threshold'), (videos.intro_max, 'intro_max'),
+    for variable, key in ((videos.threshold, 'threshold'),
                           (videos.min_match, 'min_match'), (videos.several, 'several'),
                           (videos.workers, 'workers')):
         if key in data.get('search', {}):

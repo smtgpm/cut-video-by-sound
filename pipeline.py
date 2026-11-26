@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import tempfile
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
@@ -33,6 +35,9 @@ MAX_CANDIDATES = 8  # best matches per sample considered when choosing the cuts
 # Scores at or above this all count as a perfect copy when choosing cuts, so
 # between overlapping samples that both match this well, the longest one wins.
 PERFECT_MATCH = 0.98
+# Close candidates of one sample are ranked a little higher the earlier they
+# start in this many seconds (audio_match.find_matches). Not a setting.
+INTRO_MAX = 180.0
 
 
 @dataclass
@@ -59,12 +64,75 @@ class ExportResult:
 
 
 def default_workers() -> int:
-    """Videos processed at once: about 1.3 GB of RAM and a few cores each."""
+    """
+    Videos searched at once, at most: a few cores each. Memory may allow fewer
+    at a time (see MemoryBudget), which then start as others finish.
+    """
+    return max(1, min(8, (os.cpu_count() or 1) // 4))
+
+
+def available_memory() -> float | None:
+    """Bytes of memory free for new work, None if unknown."""
     try:
-        memory = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 1e9
+        with open('/proc/meminfo') as handle:
+            for line in handle:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        # No /proc/meminfo (macOS): half of the memory, to be safe.
+        return os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES') / 2
     except (AttributeError, ValueError, OSError):
-        memory = 8.0  # Windows has no sysconf: assume a modest machine
-    return max(1, min(8, (os.cpu_count() or 1) // 4, int(memory // 3)))
+        return None  # Windows: no limit
+
+
+def search_memory(duration: float) -> float:
+    """
+    Bytes needed at most to search a video of this many seconds: its audio,
+    fingerprint and scores, about 1 GB for an hour (measured), plus margin.
+    """
+    return 0.3e9 + max(duration, 60.0) * 0.3e6
+
+
+class MemoryBudget:
+    """
+    Lets videos be searched side by side only while their memory fits in what
+    was free when the first one started. One always runs, however long it is.
+    Without this, eight hour-long episodes at once fill the memory and the
+    system slows to a crawl swapping to disk.
+    """
+    SHARE = 0.8  # of the free memory, the rest is left to the system and other programs
+
+    def __init__(self):
+        self._lock = threading.Condition()
+        self._reserved = 0.0
+        self._limit = None
+
+    @contextmanager
+    def reserve(self, amount: float, cancelled: Callable[[], bool] = lambda: False):
+        with self._lock:
+            while self._reserved:
+                if self._limit is None or self._reserved + amount <= self._limit:
+                    break
+                if cancelled():
+                    raise Cancelled()
+                self._lock.wait(0.25)
+            else:
+                free = available_memory()
+                self._limit = free * self.SHARE if free else None
+            self._reserved += amount
+        try:
+            yield
+        finally:
+            with self._lock:
+                self._reserved -= amount
+                if self._reserved < 1:
+                    self._reserved = 0.0
+                self._lock.notify_all()
+
+
+MEMORY = MemoryBudget()
 
 
 def is_video(path: str) -> bool:
@@ -452,7 +520,7 @@ def scan_video(
     samples: Sequence[str],
     *,
     threshold: float = 0.72,
-    intro_max: float = 180.0,
+    intro_max: float = INTRO_MAX,
     several_per_sample: bool = False,
     min_waveform: float = 0.0,
     windows: Dict[str, tuple] | None = None,
@@ -481,22 +549,31 @@ def scan_video(
     """
     if cancelled():
         raise Cancelled()
-    target = load_target(video)
-    duration = len(target.samples) / target.sr
-    progress(0.3)
-
-    cuts: List[Cut] = []
-    for number, sample in enumerate(samples):
+    try:
+        expected = media_info(video)[0]
+    except RuntimeError:
+        expected = 3600.0  # ffmpeg will say what is wrong
+    # Waits here while the videos already being searched leave too little memory.
+    with MEMORY.reserve(search_memory(expected), cancelled):
         if cancelled():
             raise Cancelled()
-        starts = window_starts((windows or {}).get(sample), duration)
-        cuts += [
-            Cut(m.start, m.end, sample, m.score, m.waveform_score)
-            for m in find_matches(sample, video, threshold=threshold,
-                                  intro_max_seconds=intro_max, target=target, starts=starts)
-            if m.waveform_score >= min_waveform
-        ]
-        progress(0.3 + 0.7 * (number + 1) / len(samples))
+        target = load_target(video)
+        duration = len(target.samples) / target.sr
+        progress(0.3)
+
+        cuts: List[Cut] = []
+        for number, sample in enumerate(samples):
+            if cancelled():
+                raise Cancelled()
+            starts = window_starts((windows or {}).get(sample), duration)
+            cuts += [
+                Cut(m.start, m.end, sample, m.score, m.waveform_score)
+                for m in find_matches(sample, video, threshold=threshold,
+                                      intro_max_seconds=intro_max, target=target, starts=starts)
+                if m.waveform_score >= min_waveform
+            ]
+            progress(0.3 + 0.7 * (number + 1) / len(samples))
+        del target
 
     candidates = [replace(cut, enabled=False) for cut in cuts]
     cuts = claim(cuts, list(keep))

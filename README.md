@@ -111,8 +111,10 @@ Add videos, or a folder: every video in it and in its subfolders is added.
   never shown in the review.
 - **A sample may occur several times per video**: by default each sample is
   cut at most once per video.
-- **Videos at once**: how many videos are searched in parallel, about 1.3 GB
-  of memory each. The default suits the machine.
+- **Videos at once**: how many videos are searched in parallel at most. The
+  default suits the machine. A search needs about 1 GB of memory per hour of
+  video, so when free memory is short, fewer run at once and the others wait
+  their turn (they show as Queued): long episodes never fill the memory.
 
 The cuts are chosen over all samples together: one per sample, never
 overlapping, with the highest total score. So when the intro tune is also
@@ -154,7 +156,12 @@ unticked, and overlapping ticked cuts are flagged.
   edge to the playhead.
 - "▶ What is removed" plays the cut, "▶ Result at this cut" plays across the
   junction as it will be.
-- "+ Add cut at playhead" adds a cut by hand.
+- "+ Cut at playhead" adds a cut by hand.
+- **+ Cut by time…** cuts a fixed part of the video, whatever is heard
+  there: the first or the last X seconds (the end credits, for example).
+  Tick "Also on the other videos still to review" to add it to all of them
+  at once. A video not longer than that is left alone. Like any cut added
+  by hand, it stays when the video is searched again.
 - **Save as sample…** saves the selected cut, as you adjusted it, as a new
   sample of the current set (ticked), for example a longer outro. It asks
   for its name, where to look for it and what else to cut, starting from
@@ -227,9 +234,8 @@ and "Also cut" settings made in the app (the JSON files in that folder). That co
 | `--out FOLDER` | write cleaned copies there |
 | `--in-place` | replace the videos instead (asks first; `--yes` does not) |
 | `--threshold 0.72` | match threshold, higher is stricter |
-| `--intro-max 180` | seconds in which an intro is expected, only to rank close candidates |
 | `--unlimited-extracts` | allow several cuts per sample in a video |
-| `--workers N` | videos processed in parallel, about 1.3 GB of memory each |
+| `--workers N` | videos processed in parallel at most; fewer when free memory is short (about 1 GB per hour of video) |
 
 ## How it works
 

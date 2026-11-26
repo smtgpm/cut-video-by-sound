@@ -7,7 +7,7 @@ from tkinter import messagebox, ttk
 from gui import dialogs, reviews
 from gui.common import make_tree, shorten
 from gui.state import Episode
-from pipeline import VIDEO_EXTENSIONS, Cut, default_workers, expand_video_inputs, media_info, scan_video
+from pipeline import INTRO_MAX, VIDEO_EXTENSIONS, Cut, default_workers, expand_video_inputs, media_info, scan_video
 from remove_segments import Cancelled
 from subtitles import find_sidecars
 
@@ -40,23 +40,21 @@ class VideosPanel(ttk.Frame):
         box = ttk.LabelFrame(bottom, text='Search settings', padding=8)
         box.pack(fill='x', pady=8)
         self.threshold = tk.StringVar(value='0.72')
-        self.intro_max = tk.StringVar(value='180')
         self.workers = tk.StringVar(value=str(default_workers()))
         self.min_match = tk.StringVar(value='50')
         self.several = tk.BooleanVar(value=False)
         for index, (text, variable, low, high, step, note) in enumerate((
             ('Threshold', self.threshold, 0.3, 0.99, 0.01, 'higher is stricter'),
-            ('Intro expected before', self.intro_max, 10, 3600, 10, 'seconds, only used for ranking'),
             ('Hide matches below', self.min_match, 0, 99, 5, '% match, never shown in the review'),
-            ('Videos at once', self.workers, 1, 8, 1, 'about 1.3 GB of RAM each'),
+            ('Videos at once', self.workers, 1, 8, 1, 'at most: fewer while memory is short'),
         )):
             ttk.Label(box, text=text).grid(row=index, column=0, sticky='w', pady=2)
             spin = ttk.Spinbox(box, textvariable=variable, from_=low, to=high, increment=step, width=7)
             spin.grid(row=index, column=1, padx=6)
             ttk.Label(box, text=note, style='Muted.TLabel').grid(row=index, column=2, sticky='w')
         ttk.Checkbutton(box, text='A sample may occur several times per video',
-                        variable=self.several).grid(row=4, column=0, columnspan=3, sticky='w', pady=(4, 0))
-        for variable in (self.threshold, self.intro_max, self.min_match, self.several):
+                        variable=self.several).grid(row=3, column=0, columnspan=3, sticky='w', pady=(4, 0))
+        for variable in (self.threshold, self.min_match, self.several):
             variable.trace_add('write', lambda *_: self.app.changed())
 
         row = ttk.Frame(bottom)
@@ -196,11 +194,11 @@ class VideosPanel(ttk.Frame):
     def settings(self):
         """Everything a scan's results depend on."""
         try:
-            threshold, intro_max = float(self.threshold.get()), float(self.intro_max.get())
+            threshold = float(self.threshold.get())
             min_match = float(self.min_match.get()) / 100
         except ValueError:
             return None
-        if not (0 < threshold <= 1 and 0 < intro_max < 1e6 and 0 <= min_match < 1):
+        if not (0 < threshold <= 1 and 0 <= min_match < 1):
             return None
         samples = []
         for path in self.app.panels['samples'].selected_samples():
@@ -208,7 +206,8 @@ class VideosPanel(ttk.Frame):
                 samples.append((path, os.path.getmtime(path)))
             except OSError:
                 continue
-        base = (tuple(samples), threshold, intro_max, bool(self.several.get()), min_match)
+        # INTRO_MAX keeps its place, so searches saved before it was a setting still count.
+        base = (tuple(samples), threshold, INTRO_MAX, bool(self.several.get()), min_match)
         # Per-sample options (Look in, Also cut), only there when a sample has
         # one, so other searches stay comparable.
         panel = self.app.panels['samples']
@@ -229,7 +228,7 @@ class VideosPanel(ttk.Frame):
         """
         settings = self.settings()
         if settings is None:
-            messagebox.showwarning('Find matches', 'The threshold, the intro time or the hidden match level is not valid.', parent=self)
+            messagebox.showwarning('Find matches', 'The threshold or the hidden match level is not valid.', parent=self)
             return
         if not settings[0]:
             messagebox.showwarning('Find matches', 'Save or tick at least one sample in step 1.', parent=self)
