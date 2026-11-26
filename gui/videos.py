@@ -2,9 +2,9 @@
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
-from gui import reviews
+from gui import dialogs, reviews
 from gui.common import make_tree, shorten
 from gui.state import Episode
 from pipeline import VIDEO_EXTENSIONS, default_workers, expand_video_inputs, media_info, scan_video
@@ -24,12 +24,14 @@ class VideosPanel(ttk.Frame):
         self.editing = []
         for text, command in (('Add folder…', self.ask_folder), ('Add files…', self.ask_files),
                               ('Remove', self.remove), ('Clear', self.clear)):
-            button = ttk.Button(row, text=text, command=command)
+            button = ttk.Button(row, text=text, command=command, width=len(text) + 1)
             button.pack(side='left', padx=(0, 5))
             self.editing.append(button)
+        self.unreview_button = ttk.Button(row, text='Unreview', command=self.unreview, width=9)
+        self.unreview_button.pack(side='right')
         ttk.Label(self, style='Muted.TLabel',
                   text='A folder adds every video in it and in its subfolders. Double-click to play. '
-                       'Reviewed videos are kept apart and not searched again.',
+                       'Reviewed videos are kept apart: "Unreview" sends them back to the review.',
                   wraplength=500, justify='left',
                   ).pack(anchor='w', pady=6)
 
@@ -70,17 +72,18 @@ class VideosPanel(ttk.Frame):
             heading='Video', width=190, height=5, selectmode='extended')
         frame.pack(fill='both', expand=True)
         self.tree.bind('<Double-1>', lambda _event: self.play())
+        self.tree.bind('<<TreeviewSelect>>', lambda _event: self._update_unreview())
 
     def ask_folder(self):
-        folder = filedialog.askdirectory(parent=self, initialdir=self.app.browse_dir, title='Folder containing videos')
+        folder = dialogs.ask_directory(self, 'Folder containing videos', self.app.browse_dir)
         if folder:
             self.app.browse_dir = folder
             self.add([folder])
 
     def ask_files(self):
         patterns = ' '.join(f'*{ext} *{ext.upper()}' for ext in sorted(VIDEO_EXTENSIONS))
-        paths = filedialog.askopenfilenames(parent=self, initialdir=self.app.browse_dir, title='Choose videos',
-                                            filetypes=[('Videos', patterns), ('All files', '*')])
+        paths = dialogs.ask_open_files(self, 'Choose videos', [('Videos', patterns), ('All files', '*')],
+                                       self.app.browse_dir)
         if paths:
             self.app.browse_dir = os.path.dirname(paths[0])
             self.add(paths)
@@ -152,6 +155,31 @@ class VideosPanel(ttk.Frame):
             self.app.episodes.remove(episode)
         self.app.changed()
 
+    def _selected_reviewed(self):
+        """Reviewed videos selected, or all of them if their group row is selected."""
+        selection = set(self.tree.selection())
+        return [e for e in self.app.episodes
+                if e.reviewed and (e.path in selection or 'group:done' in selection)]
+
+    def _update_unreview(self):
+        usable = self._selected_reviewed() and not self.app.tasks.busy
+        self.unreview_button.config(state='normal' if usable else 'disabled')
+
+    def unreview(self):
+        """Back to the review, with their cuts. They are not searched again."""
+        episodes = self._selected_reviewed()
+        if not episodes or self.app.tasks.busy:
+            return
+        for episode in episodes:
+            episode.reviewed = False
+            episode.status = episode.describe()
+            try:
+                reviews.forget(episode.path)
+            except OSError:
+                pass
+        self.app.report(f'{len(episodes)} video(s) back in the review, with their cuts.')
+        self.app.changed()
+
     def play(self):
         paths = {e.path for e in self.app.episodes}
         selection = [row for row in self.tree.selection() if row in paths]
@@ -192,11 +220,13 @@ class VideosPanel(ttk.Frame):
             return
         if not self.app.episodes:
             return
-        # Reviewed videos are done: only "Needs re-scan" in the review sends one back.
-        episodes = [e for e in self.app.episodes if not e.reviewed]
+        # Never the reviewed videos, those waiting for a new sample, or those
+        # already searched with these very samples and settings.
+        episodes = [e for e in self.app.episodes if e.to_search(settings)]
         if not episodes:
             messagebox.showinfo(
-                'Find matches', 'Every video is already reviewed, so there is nothing to search.\n\n'
+                'Find matches', 'There is nothing to search: every video is reviewed, already searched '
+                'with these samples, or waiting for a new sample.\n\n'
                 'To search one again, open it in step 3 and click "Needs re-scan".', parent=self)
             return
         if any(c.sample and c.edited for e in episodes for c in e.cuts) and not messagebox.askyesno(
@@ -225,6 +255,8 @@ class VideosPanel(ttk.Frame):
                                       key=lambda c: c.start)
                 episode.scanned_with = settings
                 episode.reviewed = episode.needs_rescan = False
+                episode.rescan_after = None
+                reviews.forget(episode.path)
                 count = len(episode.segments)
                 episode.status = f'{count} cut{"s" * (count != 1)}' if count else 'No match'
             self.app.changed()
@@ -252,7 +284,7 @@ class VideosPanel(ttk.Frame):
         self.tree.delete(*self.tree.get_children())
         todo = [e for e in episodes if not e.reviewed]
         done = [e for e in episodes if e.reviewed]
-        groups = [('group:todo', f'To search and review ({len(todo)})', todo, ''),
+        groups = [('group:todo', f'To review ({len(todo)})', todo, ''),
                   ('group:done', f'Reviewed ✓ ({len(done)}), not searched again', done, 'good')]
         for group, title, members, tag in groups:
             if not members:
@@ -266,9 +298,16 @@ class VideosPanel(ttk.Frame):
                                          episode.subtitles or '–', episode.status),
                                  tags=tags)
         self.tree.selection_set([row for row in selected if self.tree.exists(row)])
+        settings = self.settings()
+        search = [e for e in todo if e.to_search(settings)]
+        waiting = sum(e.waiting(settings) for e in todo)
         samples = len(self.app.panels['samples'].selected_samples())
-        self.summary.config(text=f'{len(todo)} to search, {len(done)} reviewed, {samples} sample(s) ticked')
+        text = f'{len(search)} to search, {len(done)} reviewed'
+        if waiting:
+            text += f', {waiting} waiting for a new sample'
+        self.summary.config(text=f'{text}, {samples} sample(s) ticked')
         for button in self.editing:
             button.config(state='disabled' if busy else 'normal')
-        self.scan_button.config(text=f'Find matches in {len(todo)} →',
-                                state='disabled' if busy or not todo else 'normal')
+        self._update_unreview()
+        self.scan_button.config(text=f'Find matches in {len(search)} →',
+                                state='disabled' if busy or not search else 'normal')

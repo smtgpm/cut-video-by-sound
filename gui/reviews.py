@@ -1,9 +1,13 @@
 """
-Reviews kept between sessions, in reviews.json next to the app.
+Review decisions kept between sessions, in reviews.json next to the app.
 
-A video ticked off with "Reviewed, next video" is remembered with its cuts, so
-it comes back reviewed when it is added again, and is not searched again. The
-entry only applies to the same file: if its size or date changes, it is ignored.
+A video validated in the review is remembered with its cuts: added again, even
+after a restart, it comes back reviewed and is not searched again. A video
+sent back with "Needs re-scan" is remembered too, with its cuts and, when it
+waits for new samples, the samples it must not be searched with again.
+
+An entry only applies to the same file: if its size or date changes, it is
+ignored.
 """
 
 import json
@@ -11,11 +15,10 @@ import os
 import tempfile
 from dataclasses import asdict, fields
 
-from gui.state import PROJECT
+from gui.state import PROJECT, SAVED
 from pipeline import Cut
 
 FILE = os.path.join(PROJECT, 'reviews.json')
-SAVED = 'saved review'  # scanned_with of a video restored from the file
 _CUT_FIELDS = {f.name for f in fields(Cut)}
 
 
@@ -44,15 +47,28 @@ def _identity(path):
     return info.st_size, round(info.st_mtime, 3)
 
 
+def _settings_from_json(value):
+    """JSON turned the settings tuple into lists: back to the same tuple."""
+    samples, *others = value
+    return (tuple((path, mtime) for path, mtime in samples), *others)
+
+
 def save(episode):
-    """Remember a reviewed video and its cuts."""
+    """Remember the video's review state and cuts (forgets it if neither reviewed nor sent back)."""
+    if not (episode.reviewed or episode.needs_rescan):
+        forget(episode.path)
+        return
     try:
         size, mtime = _identity(episode.path)
     except OSError:
         return
     data = _read()
-    data[episode.path] = {'size': size, 'mtime': mtime,
-                          'cuts': [asdict(cut) for cut in episode.cuts]}
+    data[episode.path] = {
+        'size': size, 'mtime': mtime,
+        'state': 'reviewed' if episode.reviewed else 'rescan',
+        'rescan_after': episode.rescan_after,
+        'cuts': [asdict(cut) for cut in episode.cuts],
+    }
     _write(data)
 
 
@@ -63,15 +79,18 @@ def forget(path):
 
 
 def restore(episode):
-    """Mark the episode reviewed, with its saved cuts, if it has a valid saved review."""
+    """Bring back a saved review state and cuts, if the file has not changed. True if restored."""
     entry = _read().get(episode.path)
     try:
         if not entry or (entry['size'], entry['mtime']) != _identity(episode.path):
             return False
         cuts = [Cut(**{k: v for k, v in cut.items() if k in _CUT_FIELDS}) for cut in entry['cuts']]
-    except (OSError, KeyError, TypeError):
+        rescan = entry.get('state') == 'rescan'
+        after = entry.get('rescan_after')
+        after = _settings_from_json(after) if rescan and after else None
+    except (OSError, KeyError, TypeError, ValueError):
         return False
-    episode.cuts, episode.reviewed, episode.scanned_with = cuts, True, SAVED
-    count = sum(cut.enabled for cut in cuts)
-    episode.status = f'Reviewed, {count} cut{"s" * (count != 1)}'
+    episode.cuts, episode.scanned_with = cuts, SAVED
+    episode.reviewed, episode.needs_rescan, episode.rescan_after = not rescan, rescan, after
+    episode.status = episode.describe()
     return True

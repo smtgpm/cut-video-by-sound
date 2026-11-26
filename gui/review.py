@@ -7,6 +7,7 @@ from tkinter import ttk
 from gui.common import (ACCENT, BORDER, CHECKED, CUT, DISABLED_CUT, FIELD, MUTED, TEXT,
                         UNCHECKED, WARNING, format_time, make_tree, on_check, parse_time, shorten)
 from gui import reviews
+from gui.state import SAVED
 from pipeline import Cut
 
 NEW_CUT_SECONDS = 10.0
@@ -183,11 +184,6 @@ class ReviewPanel(ttk.Frame):
         self.chooser.bind('<<ComboboxSelected>>', self._chosen)
         self.next_button = ttk.Button(row, text='▶', width=3, command=lambda: self.step_video(1))
         self.next_button.pack(side='left')
-        # Reviewed videos are left out of the list unless asked for.
-        self.show_reviewed = tk.BooleanVar(value=False)
-        self.show_reviewed_box = ttk.Checkbutton(row, text='Show reviewed', variable=self.show_reviewed,
-                                                 command=self.app.changed)
-        self.show_reviewed_box.pack(side='left', padx=(8, 0))
         self.info = ttk.Label(self, style='Muted.TLabel', wraplength=500, justify='left')
         self.info.pack(fill='x', pady=(5, 4))
         self.stale = ttk.Label(self, style='Warning.TLabel', wraplength=500)
@@ -234,11 +230,18 @@ class ReviewPanel(ttk.Frame):
         row.pack(fill='x')
         self.add_button = ttk.Button(row, text='+ Add cut at playhead', command=self.add)
         self.add_button.pack(side='left')
+
+        # The decision on this video.
+        row = ttk.Frame(bottom)
+        row.pack(fill='x', pady=(8, 0))
         self.rescan_button = ttk.Button(row, text='↻ Needs re-scan', command=self.needs_rescan)
-        self.rescan_button.pack(side='right')
-        self.done_button = ttk.Button(row, text='✓ Reviewed, next video', style='Primary.TButton',
+        self.rescan_button.pack(side='left')
+        self.wait_for_new = tk.BooleanVar(value=False)
+        self.wait_check = ttk.Checkbutton(row, text='Not with the current samples', variable=self.wait_for_new)
+        self.wait_check.pack(side='left', padx=6)
+        self.done_button = ttk.Button(row, text='✓ Validate, reviewed', style='Primary.TButton',
                                       command=self.reviewed)
-        self.done_button.pack(side='right', padx=5)
+        self.done_button.pack(side='right')
 
         frame, self.tree = make_tree(
             self, [('start', 'Start', 78, 'e'), ('end', 'End', 78, 'e'),
@@ -250,9 +253,8 @@ class ReviewPanel(ttk.Frame):
 
     # ---------- Choosing the video ----------
     def visible(self):
-        """The videos in the list: not reviewed yet, unless "Show reviewed" is ticked."""
-        everything = self.show_reviewed.get()
-        return [e for e in self.app.episodes if everything or not e.reviewed or e is self.episode]
+        """The videos in the list: never the reviewed ones (step 2 can unreview them)."""
+        return [e for e in self.app.episodes if not e.reviewed]
 
     def _chosen(self, _event=None):
         index, episodes = self.chooser.current(), self._visible
@@ -269,49 +271,50 @@ class ReviewPanel(ttk.Frame):
             self.show_episode(episodes[index])
 
     def reviewed(self):
-        if not self.episode:
-            return
+        """Validate this video: kept with its cuts, never shown or searched again."""
         episode = self.episode
-        episode.reviewed, episode.needs_rescan = True, False
-        count = len(episode.segments)
-        episode.status = f'Reviewed, {count} cut{"s" * (count != 1)}'
-        try:
-            reviews.save(episode)
-        except OSError as exc:
-            self.app.report(f'Reviewed, but could not be saved for next time: {exc}')
-        episodes = self.app.episodes
-        index = episodes.index(self.episode)
-        later = episodes[index + 1:] + episodes[:index]
-        following = next((e for e in later if not e.reviewed), None)
-        if following:
-            self.show_episode(following)
-        else:
-            self.app.changed()
-            self.app.report('Every video is reviewed. Next: export.')
-            self.app.show('export')
+        if not episode:
+            return
+        episode.reviewed, episode.needs_rescan, episode.rescan_after = True, False, None
+        self._done_with(episode, 'Every video is reviewed. Next: export.')
 
     def needs_rescan(self):
-        """Send the video back to step 2, to be searched again (with new samples)."""
+        """
+        Send the video back to step 2 for a new search. With "Not with the
+        current samples", it waits until a sample is added (or a setting changed).
+        """
         episode = self.episode
         if not episode or self.app.tasks.busy:
             return
+        settings = self.app.panels['videos'].settings()
         episode.reviewed, episode.needs_rescan = False, True
-        episode.status = 'Needs re-scan'
+        episode.rescan_after = settings if self.wait_for_new.get() and settings else None
+        if episode.rescan_after:
+            note = 'it waits for a new sample: add one in step 1, then "Find matches" in step 2.'
+        else:
+            note = 'it will be searched again by "Find matches" in step 2.'
+        self._done_with(episode, f'{episode.name}: {note}')
+
+    def _done_with(self, episode, finished_text):
+        """Save the decision, then open the next video still to review."""
+        episode.status = episode.describe()
         try:
-            reviews.forget(episode.path)
-        except OSError:
-            pass
-        self.app.report(f'{episode.name} will be searched again. Add or tick samples in step 1 if needed, '
-                        'then "Find matches" in step 2: reviewed videos are skipped.')
-        # Nothing more to do here until it is searched again: move on.
+            reviews.save(episode)
+        except OSError as exc:
+            self.app.report(f'Could not be saved for next time: {exc}')
         episodes = self.app.episodes
         index = episodes.index(episode)
         later = episodes[index + 1:] + episodes[:index]
         following = next((e for e in later if not e.reviewed and not e.needs_rescan), None)
         if following:
             self.show_episode(following)
-        else:
-            self.app.changed()
+            return
+        self.app.report(finished_text)
+        if episode.reviewed:
+            # Nothing left to review: a reviewed video is never shown again.
+            self.episode = self.cut = None
+            self.app.show('export')
+        self.app.changed()
 
     def show_episode(self, episode):
         self.episode = episode
@@ -394,9 +397,8 @@ class ReviewPanel(ttk.Frame):
             control.config(state=state)
         self.toggle_button.config(text='Untick' if cut and cut.enabled else 'Tick')
         self.add_button.config(state='normal' if self.episode and not busy else 'disabled')
-        self.done_button.config(state='normal' if self.episode else 'disabled')
-        can_rescan = self.episode and not busy and not self.episode.needs_rescan
-        self.rescan_button.config(state='normal' if can_rescan else 'disabled')
+        for widget in (self.done_button, self.rescan_button, self.wait_check):
+            widget.config(state='normal' if self.episode and not busy else 'disabled')
 
     def toggle_cut(self, cut):
         if self.app.tasks.busy or cut is None or not self.episode:
@@ -509,15 +511,13 @@ class ReviewPanel(ttk.Frame):
         episode.cuts.sort(key=lambda cut: cut.start)
         episode.output, episode.junctions = '', []
         count = len(episode.segments)
-        if episode.reviewed:
-            # Changes to a reviewed video are kept too.
-            episode.status = f'Reviewed, {count} cut{"s" * (count != 1)}'
+        if episode.reviewed or episode.needs_rescan:
+            # Changes to a video already decided on are kept too.
+            episode.status = episode.describe()
             try:
                 reviews.save(episode)
             except OSError as exc:
                 self.app.report(f'This change could not be saved for next time: {exc}')
-        elif episode.needs_rescan:
-            episode.status = 'Needs re-scan'
         elif episode.ready:
             episode.status = f'{count} cut{"s" * (count != 1)}' if count else 'No cuts'
         else:
@@ -539,17 +539,28 @@ class ReviewPanel(ttk.Frame):
 
     # ---------- Called by the app ----------
     def activate(self):
-        todo = [e for e in self.app.episodes if not e.reviewed]
-        hidden = self.episode and self.episode.reviewed and not self.show_reviewed.get()
-        if (not self.episode or hidden) and (todo or self.app.episodes):
-            self.show_episode((todo or self.app.episodes)[0])
-        elif self.episode:
+        if self.episode and not self.episode.reviewed:
             self.select_cut(self.cut, seek=False, refit=False)
+            return
+        first = self._first_to_review()
+        if first:
+            self.show_episode(first)
+        else:
+            self.episode = self.cut = None
+            self.app.changed()
+
+    def _first_to_review(self):
+        """The first video not reviewed, preferably one not sent back for a new search."""
+        todo = [e for e in self.app.episodes if not e.reviewed]
+        return next((e for e in todo if not e.needs_rescan), todo[0] if todo else None)
 
     def refresh(self):
         episodes = self.app.episodes
-        if self.episode not in episodes:
+        if self.episode not in episodes or (self.episode and self.episode.reviewed):
             self.episode = self.cut = None
+        if not self.episode and self.app.active() is self and self._first_to_review():
+            # Open on the next video to review, e.g. when a search ends while this tab is shown.
+            self.after_idle(lambda: self.episode or self.show_episode(self._first_to_review()))
         # Cut compares by value, so identity has to be checked.
         if self.cut and not (self.episode and any(c is self.cut for c in self.episode.cuts)):
             self.cut = None
@@ -565,13 +576,10 @@ class ReviewPanel(ttk.Frame):
             self.chooser.current(visible.index(self.episode))
         else:
             self.choice.set('Add videos and find matches first' if not episodes else
-                            'Every video is reviewed: tick "Show reviewed" to see them' if not visible else
-                            'Choose a video')
+                            'Every video is reviewed' if not visible else 'Choose a video')
         index = visible.index(self.episode) if self.episode else -1
         self.prev_button.config(state='normal' if index > 0 else 'disabled')
         self.next_button.config(state='normal' if index < len(visible) - 1 else 'disabled')
-        reviewed_count = sum(e.reviewed for e in episodes)
-        self.show_reviewed_box.config(text=f'Show reviewed ({reviewed_count})')
 
         self.tree.delete(*self.tree.get_children())
         self.rows = {}
@@ -597,8 +605,14 @@ class ReviewPanel(ttk.Frame):
             text = (f'{len(self.episode.segments)} of {len(self.episode.cuts)} cut(s) ticked in this video. '
                     f'{reviewed} of {len(episodes)} video(s) reviewed. '
                     'Click a tick to change it, or a row to adjust it below.')
-            if not self.episode.ready:
+            if self.episode.needs_rescan:
+                text = (f'↻ {self.episode.describe()}: sent back to step 2. '
+                        'Validate it instead if these cuts are right.')
+            elif not self.episode.ready:
                 text = f'{self.episode.status}. Run "Find matches" in step 2, or add cuts by hand.'
+        elif episodes and not visible:
+            text = (f'All {len(episodes)} videos are reviewed. To review one again, select it in '
+                    'step 2 and click "Unreview".')
         else:
             text = 'Videos are reviewed one at a time. Choose one above.'
         overlaps = self._overlaps()
@@ -610,7 +624,7 @@ class ReviewPanel(ttk.Frame):
         self.info.config(text=text, style='Warning.TLabel' if overlaps else 'Muted.TLabel')
 
         settings = self.app.panels['videos'].settings()
-        if any(e.scanned_with and e.scanned_with != settings and not e.reviewed for e in episodes):
+        if any(e.scanned_with not in (None, settings, SAVED) and not e.reviewed for e in episodes):
             self.stale.config(text='Samples or settings changed since the search. '
                                    'Run "Find matches" again to update these results.')
             self.stale.pack(fill='x', pady=(0, 6), before=self.tree.master)

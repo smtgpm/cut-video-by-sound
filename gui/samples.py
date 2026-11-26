@@ -2,8 +2,9 @@
 
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk
 
+from gui import dialogs
 from gui.common import (CHECKED, SAMPLE, UNCHECKED, format_time, make_tree,
                         on_check, parse_time, shorten)
 from gui.state import PROJECT
@@ -144,15 +145,16 @@ class SamplesPanel(ttk.Frame):
             self.refresh_sets(folder)
 
     def ask_folder(self):
-        folder = filedialog.askdirectory(parent=self, title='Folder containing .wav samples')
+        folder = dialogs.ask_directory(self, 'Folder containing .wav samples')
         if folder:
             self.refresh_sets(os.path.abspath(folder))
 
     # ---------- Marking ----------
     def ask_video(self):
         patterns = ' '.join(f'*{ext} *{ext.upper()}' for ext in sorted(VIDEO_EXTENSIONS))
-        path = filedialog.askopenfilename(parent=self, initialdir=self.app.browse_dir, title='Choose a video',
-                                          filetypes=[('Videos', patterns), ('All files', '*')])
+        chosen = dialogs.ask_open_files(self, 'Choose a video', [('Videos', patterns), ('All files', '*')],
+                                        self.app.browse_dir, multiple=False)
+        path = chosen[0] if chosen else ''
         if path:
             self.app.browse_dir = os.path.dirname(path)
             self.open_video(path)

@@ -3,12 +3,12 @@
 import glob
 import os
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
-from gui import reviews
+from gui import dialogs, reviews
 from gui.common import (CHECKED, CUT, FIELD, TEXT, UNCHECKED, make_tree,
                         on_check, open_folder, shorten)
-from gui.state import PROJECT
+from gui.state import PROJECT, SAVED
 from pipeline import export_video, plan_outputs, replace_video, replaced_path
 from remove_segments import Cancelled
 from timeline import Timeline
@@ -79,7 +79,7 @@ class ExportPanel(ttk.Frame):
         self.tree.bind('<Double-1>', lambda _event: self.play())
 
     def ask_folder(self):
-        folder = filedialog.askdirectory(parent=self, title='Output folder')
+        folder = dialogs.ask_directory(self, 'Output folder', self.folder.get())
         if folder:
             self.folder.set(os.path.abspath(folder))
 
@@ -116,7 +116,7 @@ class ExportPanel(ttk.Frame):
         folder = os.path.abspath(os.path.expanduser(folder or '.'))
 
         settings = self.app.panels['videos'].settings()
-        if any(e.scanned_with and e.scanned_with != settings and not e.reviewed
+        if any(e.scanned_with not in (None, settings, SAVED) and not e.reviewed
                for e in episodes) and not messagebox.askyesno(
                 'Export', 'Samples or settings changed since the search. Export the cuts as they are shown?',
                 parent=self):
@@ -245,6 +245,7 @@ class ExportPanel(ttk.Frame):
                 episode.duration = timeline.map(round(episode.duration * 1000)) / 1000
                 episode.path = episode.output = result.output
                 episode.cuts, episode.scanned_with, episode.reviewed = [], None, False
+                episode.needs_rescan, episode.rescan_after = False, None
                 episode.junctions = [timeline.map(a) / 1000 for a, _ in timeline.cuts]
                 episode.status = 'Replaced, with warnings' if result.warnings else 'Replaced'
                 results['done'] += 1

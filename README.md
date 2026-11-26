@@ -33,7 +33,8 @@ There is a desktop app and a command line.
 You need Python 3.10 or newer, [FFmpeg](https://ffmpeg.org/) (with
 `ffprobe`) in your `PATH`, and [VLC](https://www.videolan.org/) for playback
 in the app. Tkinter comes with Python on Windows and macOS; on Debian or
-Ubuntu, install `python3-tk`.
+Ubuntu, install `python3-tk`. On Linux, if `zenity` is installed (it comes
+with GNOME), the app uses the system's own file and folder dialogs.
 
 ```bash
 git clone https://github.com/smtgpm/cut-video-by-sound.git
@@ -84,13 +85,19 @@ played inside the outro, the intro sample cannot take the copy inside the
 outro, even if it scores a little higher there, because the outro would then
 be left with a poor match.
 
-The list is split in two: videos **to search and review**, and videos
-already **reviewed**, which "Find matches" skips.
+The list is split in two: videos **to review**, and videos already
+**reviewed**. "Find matches" only searches the videos that need it: never the
+reviewed ones, nor those already searched with the same samples and
+settings, nor those waiting for a new sample (see below).
+
+To review a video again, select it (or the whole "Reviewed" group) and click
+**Unreview**: it goes back to the review with its cuts, without a new search.
 
 ### 3. Review cuts
 
-The review lists the videos not reviewed yet, one at a time (◀ ▶ or the list
-at the top). Tick "Show reviewed" to see the others too.
+The review goes through the videos not reviewed yet, one at a time (◀ ▶ or
+the list at the top). A reviewed video is never shown again, unless you
+unreview it in step 2.
 
 For each video, the list shows its cuts and how well each one matches.
 Doubtful matches (a similar sound, but not a copy of the sample) start
@@ -103,11 +110,17 @@ unticked, and overlapping ticked cuts are flagged.
 - "▶ What is removed" plays the cut, "▶ Result at this cut" plays across the
   junction as it will be.
 - "+ Add cut at playhead" adds a cut by hand.
-- **✓ Reviewed, next video** marks the video done and opens the next one.
-  Reviewed videos are saved, with their cuts: add the same file again, even
-  after restarting the app, and it comes back reviewed.
-- **↻ Needs re-scan** sends the video back to be searched again, for example
-  after adding a new sample in step 1. Cuts you added by hand are kept.
+Then decide, and the next video opens:
+
+- **✓ Validate, reviewed**: the cuts are right. The video is saved with its
+  cuts: add the same file again, even after restarting the app, and it comes
+  back reviewed.
+- **↻ Needs re-scan**: the video goes back to step 2, to be searched again by
+  the next "Find matches". Cuts you added by hand are kept.
+  With **Not with the current samples** ticked, it waits instead: it is only
+  searched again once you add a sample in step 1 (or change a search
+  setting), since searching again with the same samples would find the same
+  thing. This choice is saved too.
 
 | Key | Action |
 |---|---|
@@ -234,7 +247,7 @@ All next to the program, and not part of the repository:
 | Path | What |
 |---|---|
 | `refs/<set>/*.wav` | your samples, one folder per set |
-| `reviews.json` | the videos you marked reviewed, with their cuts. An entry only applies while the file keeps the same size and date |
+| `reviews.json` | the videos you validated or sent back for a new search, with their cuts. An entry only applies while the file keeps the same size and date |
 
 ## Project layout
 
