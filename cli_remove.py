@@ -15,9 +15,9 @@ import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from audio_match import find_matches, load_target
-from pipeline import (DOUBTFUL_WAVEFORM, default_workers, describe_window, expand_video_inputs,
-                      export_video, plan_outputs, read_windows, replace_video, replaced_path,
-                      settle_cuts, window_starts)
+from pipeline import (DOUBTFUL_WAVEFORM, default_workers, describe_extension, describe_window,
+                      expand_video_inputs, export_video, extend_cuts, media_info, plan_outputs, read_extensions,
+                      read_windows, replace_video, replaced_path, settle_cuts, window_starts)
 
 
 def process_video(video_path, ref_paths, out_base, args):
@@ -41,6 +41,10 @@ def process_video(video_path, ref_paths, out_base, args):
     # copy inside the outro.
     chosen, _ = settle_cuts(found, lambda m: m.ref, lambda m: m.waveform_score,
                             one_per_sample=not args.unlimited_extracts)
+    extensions = read_extensions(args.refs)
+    if extensions:
+        duration = min(duration, media_info(video_path)[0] or duration)
+        extend_cuts(chosen, lambda m: extensions.get(os.path.basename(m.ref)), duration, barriers=chosen)
 
     segments = []
     for match in sorted(chosen, key=lambda m: m.start):
@@ -122,10 +126,13 @@ def main():
             return
 
     limit = 'every match that fits' if args.unlimited_extracts else 'one cut per sample'
-    windows = read_windows(args.refs)
+    windows, extensions = read_windows(args.refs), read_extensions(args.refs)
     for ref in refs:
-        if os.path.basename(ref) in windows:
-            print(f'{os.path.basename(ref)}: only matches starting in {describe_window(windows[os.path.basename(ref)])}')
+        name = os.path.basename(ref)
+        if name in windows:
+            print(f'{name}: only matches starting in {describe_window(windows[name])}')
+        if name in extensions:
+            print(f'{name}: also cuts everything {describe_extension(extensions[name])}')
     print(f'{len(jobs)} video(s), {len(refs)} sample(s), threshold {args.threshold:.2f}, '
           f'{limit}, {max(1, args.workers)} at once.\n')
 

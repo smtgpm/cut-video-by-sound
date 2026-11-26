@@ -1,18 +1,21 @@
 """
-"Look in": where in each video a sample is looked for (see pipeline.read_windows).
+Per-sample options, chosen when creating a sample, in the sample list and when
+saving a reviewed cut as a sample (ask_new_sample, the review's dialog):
 
-WhereField is the choice itself, used when creating a sample, in the sample
-list and when saving a reviewed cut as a sample; ask_new_sample is the
-dialog of the review's "Save as sample…".
+- WhereField, "Look in": where in each video the sample is looked for
+  (see pipeline.read_windows);
+- ExtendField, "Also cut": everything before or after its match, up to some
+  seconds (see pipeline.read_extensions).
 """
 
 import tkinter as tk
 from tkinter import messagebox, ttk
 
 from gui.common import BG
-from pipeline import check_window
+from pipeline import check_extension, check_window
 
 CHOICES = ('Anywhere', 'Starts between', 'Starts in the last')
+EXTENDS = ('Nothing more', 'Everything before, up to', 'Everything after, up to')
 
 
 def phrase(window):
@@ -75,8 +78,55 @@ class WhereField(ttk.Frame):
         return None
 
 
-def ask_new_sample(parent, title, text, name, window):
-    """A name and a window for a new sample, or None if cancelled."""
+class ExtendField(ttk.Frame):
+    """Nothing more, or everything before / after the match, up to X seconds."""
+
+    def __init__(self, parent, extension=None):
+        super().__init__(parent)
+        self.kind = tk.StringVar(value=EXTENDS[0])
+        box = ttk.Combobox(self, textvariable=self.kind, values=EXTENDS, state='readonly', width=22)
+        box.pack(side='left')
+        box.bind('<<ComboboxSelected>>', lambda _event: self._show())
+        self.most = tk.StringVar(value='60')
+        self.entry = ttk.Entry(self, textvariable=self.most, width=6)
+        self.seconds = ttk.Label(self, text='s')
+        self.set(extension)
+
+    def _show(self):
+        self.entry.pack_forget()
+        self.seconds.pack_forget()
+        if self.kind.get() != EXTENDS[0]:
+            self.entry.pack(side='left', padx=(5, 3))
+            self.seconds.pack(side='left')
+
+    def set(self, extension):
+        if not extension:
+            self.kind.set(EXTENDS[0])
+        else:
+            self.kind.set(EXTENDS[1] if extension[0] == 'before' else EXTENDS[2])
+            self.most.set(f'{extension[1]:g}')
+        self._show()
+
+    def get(self):
+        """The extension chosen (None: nothing more). ValueError if the number is wrong."""
+        kind = EXTENDS.index(self.kind.get())
+        if not kind:
+            return None
+        try:
+            return check_extension(('before' if kind == 1 else 'after', float(self.most.get())))
+        except (TypeError, ValueError):
+            raise ValueError('Give "Also cut" a number of seconds above 0.')
+
+
+def extension_phrase(extension):
+    """'' or ', also cutting everything before it (up to 60 s)'."""
+    if not extension:
+        return ''
+    return f', also cutting everything {extension[0]} it (up to {extension[1]:g} s)'
+
+
+def ask_new_sample(parent, title, text, name, window, extension=None):
+    """(name, window, extension) for a new sample, or None if cancelled."""
     dialog = tk.Toplevel(parent)
     dialog.title(title)
     dialog.configure(bg=BG)
@@ -93,22 +143,25 @@ def ask_new_sample(parent, title, text, name, window):
     ttk.Label(frame, text='Look in').grid(row=2, column=0, sticky='w', padx=(0, 8))
     where = WhereField(frame, window)
     where.grid(row=2, column=1, sticky='w', pady=3)
+    ttk.Label(frame, text='Also cut').grid(row=3, column=0, sticky='w', padx=(0, 8))
+    extend = ExtendField(frame, extension)
+    extend.grid(row=3, column=1, sticky='w', pady=3)
     result = {}
 
     def ok(_event=None):
         try:
-            chosen = where.get()
+            chosen = where.get(), extend.get()
         except ValueError as exc:
             messagebox.showwarning(title, str(exc), parent=dialog)
             return
         if not value.get().strip():
             messagebox.showwarning(title, 'Give the sample a name.', parent=dialog)
             return
-        result['value'] = value.get().strip(), chosen
+        result['value'] = (value.get().strip(), *chosen)
         dialog.destroy()
 
     buttons = ttk.Frame(frame)
-    buttons.grid(row=3, column=0, columnspan=2, sticky='e', pady=(12, 0))
+    buttons.grid(row=4, column=0, columnspan=2, sticky='e', pady=(12, 0))
     ttk.Button(buttons, text='Cancel', command=dialog.destroy).pack(side='right')
     ttk.Button(buttons, text='Save sample', style='Primary.TButton', command=ok).pack(side='right', padx=6)
     dialog.bind('<Return>', ok)

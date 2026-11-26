@@ -157,54 +157,116 @@ def list_samples(folder: str) -> List[str]:
             if name.lower().endswith('.wav')]
 
 
-# ---------- Where each sample is looked for ----------
-# A sample set may say, per sample, where in a video its match must start:
-#   ('first', a, b)  between a and b seconds after the start
-#   ('last', x)      in the last x seconds
-# Samples not listed are looked for anywhere. Kept next to the samples.
+# ---------- Per-sample options, kept next to the samples ----------
+# A sample set may say, per sample (by file name):
+# - where in a video its match must start (search-windows.json):
+#     ('first', a, b)  between a and b seconds after the start
+#     ('last', x)      in the last x seconds
+#   Samples not listed are looked for anywhere.
+# - what to cut beyond the match (cut-extensions.json):
+#     ('before', x)    also everything before it, up to x seconds
+#     ('after', x)     also everything after it, up to x seconds
 WINDOWS_FILE = 'search-windows.json'
+EXTENSIONS_FILE = 'cut-extensions.json'
 
 
-def read_windows(folder: str) -> Dict[str, tuple]:
-    """{sample file name: window} for a sample set."""
+def _read_options(folder: str, file_name: str, check) -> Dict[str, tuple]:
     try:
-        with open(os.path.join(folder, WINDOWS_FILE), encoding='utf-8') as handle:
+        with open(os.path.join(folder, file_name), encoding='utf-8') as handle:
             data = json.load(handle)
     except (OSError, ValueError):
         return {}
-    windows = {}
-    for name, window in (data.items() if isinstance(data, dict) else ()):
+    options = {}
+    for name, value in (data.items() if isinstance(data, dict) else ()):
         try:
-            windows[name] = check_window(window)
-        except ValueError:
+            options[name] = check(value)
+        except (TypeError, ValueError):
             continue
-    return windows
+    return options
 
 
-def write_window(folder: str, name: str, window: tuple | None) -> None:
-    """Set (or with None, remove) the window of one sample of a set."""
-    windows = read_windows(folder)
-    if window is None:
-        windows.pop(name, None)
+def _write_option(folder: str, file_name: str, check, name: str, value) -> None:
+    options = _read_options(folder, file_name, check)
+    if value is None:
+        options.pop(name, None)
     else:
-        windows[name] = check_window(window)
-    path = os.path.join(folder, WINDOWS_FILE)
-    if not windows:
+        options[name] = check(value)
+    path = os.path.join(folder, file_name)
+    if not options:
         if os.path.exists(path):
             os.unlink(path)
         return
-    handle, temporary = tempfile.mkstemp(prefix='.windows-', dir=folder)
+    handle, temporary = tempfile.mkstemp(prefix='.options-', dir=folder)
     try:
         with os.fdopen(handle, 'w', encoding='utf-8') as target:
-            json.dump({k: list(v) for k, v in sorted(windows.items())}, target, indent=1)
+            json.dump({k: list(v) for k, v in sorted(options.items())}, target, indent=1)
         os.replace(temporary, path)
     finally:
         if os.path.exists(temporary):
             os.unlink(temporary)
 
 
+def read_windows(folder: str) -> Dict[str, tuple]:
+    """{sample file name: window} for a sample set."""
+    return _read_options(folder, WINDOWS_FILE, check_window)
+
+
+def write_window(folder: str, name: str, window: tuple | None) -> None:
+    """Set (or with None, remove) the window of one sample of a set."""
+    _write_option(folder, WINDOWS_FILE, check_window, name, window)
+
+
 def window_of(sample: str) -> tuple | None:
     return read_windows(os.path.dirname(sample)).get(os.path.basename(sample))
+
+
+def read_extensions(folder: str) -> Dict[str, tuple]:
+    """{sample file name: extension} for a sample set."""
+    return _read_options(folder, EXTENSIONS_FILE, check_extension)
+
+
+def write_extension(folder: str, name: str, extension: tuple | None) -> None:
+    """Set (or with None, remove) what is cut beyond one sample's match."""
+    _write_option(folder, EXTENSIONS_FILE, check_extension, name, extension)
+
+
+def extension_of(sample: str) -> tuple | None:
+    return read_extensions(os.path.dirname(sample)).get(os.path.basename(sample))
+
+
+def check_extension(extension) -> tuple:
+    kind, *values = extension
+    if kind in ('before', 'after') and len(values) == 1 and float(values[0]) > 0:
+        return (kind, float(values[0]))
+    raise ValueError(f'Not a cut extension: {extension!r}')
+
+
+def describe_extension(extension: tuple | None) -> str:
+    """'–', 'before ≤60 s' or 'after ≤120 s'."""
+    if not extension:
+        return '–'
+    return f'{extension[0]} ≤{extension[1]:g} s'
+
+
+def extend_cuts(cuts: list, extension: Callable[[object], tuple | None], duration: float,
+                barriers: Sequence = ()) -> None:
+    """
+    Stretch each cut (anything with start and end) by its sample's extension:
+    everything before it, or after it, up to the extension's seconds. A cut
+    stops at the ends of the video, and at any barrier (the other cuts kept),
+    so it never swallows another cut.
+    """
+    for cut in cuts:
+        wanted = extension(cut)
+        if not wanted:
+            continue
+        others = [other for other in barriers if other is not cut]
+        if wanted[0] == 'before':
+            limit = max([0.0] + [o.end for o in others if o.end <= cut.start + 1e-6])
+            cut.start = max(cut.start - wanted[1], limit)
+        else:
+            limit = min([duration] + [o.start for o in others if o.start >= cut.end - 1e-6])
+            cut.end = min(cut.end + wanted[1], limit)
 
 
 def check_window(window) -> tuple:
@@ -394,6 +456,7 @@ def scan_video(
     several_per_sample: bool = False,
     min_waveform: float = 0.0,
     windows: Dict[str, tuple] | None = None,
+    extensions: Dict[str, tuple] | None = None,
     keep: Sequence[Cut] = (),
     progress: Callable[[float], None] = lambda fraction: None,
     cancelled: Callable[[], bool] = lambda: False,
@@ -409,6 +472,9 @@ def scan_video(
 
     windows: {sample path: window}, where each sample's match must start
     (see read_windows); other samples are looked for anywhere.
+    extensions: {sample path: extension}, what to cut beyond a sample's match
+    (see read_extensions). Applied once the cuts are chosen, and never over
+    another chosen or kept cut.
 
     candidates: every place each sample was heard, untrimmed, so the review
     can move a cut to its sample's next best match.
@@ -441,6 +507,14 @@ def scan_video(
         cut.enabled = True
     for cut in others:
         cut.enabled = False
+    if extensions:
+        # The decoded audio can run a little past the video: stop at the shorter.
+        try:
+            duration = min(duration, media_info(video)[0] or duration)
+        except RuntimeError:
+            pass
+        extend_cuts(chosen + others, lambda cut: extensions.get(cut.sample), duration,
+                    barriers=chosen + list(keep))
     return sorted(chosen + others, key=lambda cut: cut.start), candidates
 
 

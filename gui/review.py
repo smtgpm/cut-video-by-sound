@@ -8,8 +8,8 @@ from gui.common import (ACCENT, BORDER, CHECKED, CUT, DISABLED_CUT, FIELD, MUTED
                         UNCHECKED, WARNING, format_time, make_tree, on_check, parse_time, shorten)
 from gui import reviews
 from gui.state import SAVED
-from gui.where import ask_new_sample, phrase
-from pipeline import Cut
+from gui.where import ask_new_sample, extension_phrase, phrase
+from pipeline import Cut, extend_cuts
 
 NEW_CUT_SECONDS = 10.0
 MIN_CUT = 0.1  # seconds
@@ -346,17 +346,25 @@ class ReviewPanel(ttk.Frame):
         base = os.path.splitext(os.path.basename(cut.sample))[0] if cut.sample else 'cut'
         samples = self.app.panels['samples']
         # Starts from where the original sample is looked for.
+        text = (f'New sample of the set "{os.path.basename(samples.folder)}": {cut.end - cut.start:.2f} s, '
+                f'{format_time(cut.start)} – {format_time(cut.end)} of {episode.name}.')
+        index = episode.place_of(cut)
+        if index is not None:
+            place = episode.alternatives(cut)[index]
+            if cut.end - cut.start > place.end - place.start + 0.5:
+                text += ('\n\nThis includes the part cut by its sample\'s "Also cut": adjust the edges '
+                         'first if the new sample should be only the matched sound.')
         answer = ask_new_sample(
-            self, 'Save as sample',
-            f'New sample of the set "{os.path.basename(samples.folder)}": {cut.end - cut.start:.2f} s, '
-            f'{format_time(cut.start)} – {format_time(cut.end)} of {episode.name}.',
-            f'{base}_edited', samples.window(cut.sample) if cut.sample else None)
+            self, 'Save as sample', text,
+            f'{base}_edited', samples.window(cut.sample) if cut.sample else None,
+            samples.extension(cut.sample) if cut.sample else None)
         if not answer:
             return
-        name, window = answer
-        samples.add_sample(episode.path, cut.start, cut.end, name, window=window,
+        name, window, extension = answer
+        samples.add_sample(episode.path, cut.start, cut.end, name, window=window, extension=extension,
                            saved=lambda path: self.app.report(
-                               f'{os.path.basename(path)} saved and ticked, looked for {phrase(window)}. '
+                               f'{os.path.basename(path)} saved and ticked, looked for {phrase(window)}'
+                               f'{extension_phrase(extension)}. '
                                '"↻ Re-scan now" searches this video with it (tick "Keep selected samples" '
                                'to keep the cuts you already have).'))
 
@@ -577,11 +585,16 @@ class ReviewPanel(ttk.Frame):
         if len(places) < 2:
             self.app.report('The search found this sample nowhere else in this video.')
             return
-        here = next((i for i, c in enumerate(places) if abs(c.start - cut.start) < 0.5), -1)
+        here = episode.place_of(cut)
+        here = -1 if here is None else here
         index = (here + 1) % len(places)
         place = places[index]
         cut.start, cut.end, cut.score, cut.waveform = place.start, place.end, place.score, place.waveform
         cut.edited = False
+        # Its sample's "Also cut", up to the other ticked cuts.
+        extension = self.app.panels['samples'].extension(cut.sample)
+        extend_cuts([cut], lambda _cut: extension, episode.duration,
+                    barriers=[c for c in episode.cuts if c.enabled and c is not cut])
         self.editor.fit(cut)
         self._edited()
         self.select_cut(cut, refit=False)
@@ -681,7 +694,7 @@ class ReviewPanel(ttk.Frame):
                                                           ' edited' if cut.edited else '')
                 places = self.episode.alternatives(cut)
                 if len(places) > 1:
-                    rank = next((i for i, c in enumerate(places) if abs(c.start - cut.start) < 0.5), None)
+                    rank = self.episode.place_of(cut)
                     match += f'  {rank + 1}/{len(places)}' if rank is not None else f'  ·/{len(places)}'
                 tags = ('warning',) if cut.doubtful else ()
             if not cut.enabled:

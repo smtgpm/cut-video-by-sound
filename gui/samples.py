@@ -5,12 +5,13 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 from gui import dialogs
-from gui.where import WhereField, phrase
+from gui.where import ExtendField, WhereField, extension_phrase, phrase
 from gui.common import (CHECKED, SAMPLE, UNCHECKED, format_time, make_tree,
                         on_check, parse_time, shorten)
 from gui.state import PROJECT
-from pipeline import (VIDEO_EXTENSIONS, describe_window, list_samples, media_info,
-                      read_windows, safe_name, save_sample, window_of, write_window)
+from pipeline import (VIDEO_EXTENSIONS, describe_extension, describe_window, extension_of, list_samples,
+                      media_info, read_extensions, read_windows, safe_name, save_sample, window_of,
+                      write_extension, write_window)
 
 REFS = os.path.join(PROJECT, 'refs')
 
@@ -25,6 +26,7 @@ class SamplesPanel(ttk.Frame):
         self.samples = []
         self.unchecked = set()
         self.windows = {}  # of the current set: {file name: window}
+        self.extensions = {}  # of the current set: {file name: extension}
         self._build()
         self.refresh_sets()
 
@@ -60,6 +62,9 @@ class SamplesPanel(ttk.Frame):
         ttk.Label(grid, text='Look in', width=7).grid(row=3, column=0, sticky='w')
         self.new_where = WhereField(grid)
         self.new_where.grid(row=3, column=1, columnspan=4, sticky='w', pady=2)
+        ttk.Label(grid, text='Also cut', width=7).grid(row=4, column=0, sticky='w')
+        self.new_extend = ExtendField(grid)
+        self.new_extend.grid(row=4, column=1, columnspan=4, sticky='w', pady=2)
 
         ttk.Label(box, style='Muted.TLabel', wraplength=480, justify='left',
                   text='Tip: start exactly on the intro or just inside it. With even a little of '
@@ -92,15 +97,21 @@ class SamplesPanel(ttk.Frame):
                                       command=lambda: self.app.show('videos'))
         self.next_button.pack(side='right')
 
-        # Where the selected samples are looked for in each video.
-        row = ttk.Frame(box)
-        row.pack(side='bottom', fill='x', pady=(6, 0))
-        ttk.Label(row, text='Look in').pack(side='left')
-        self.where = WhereField(row)
-        self.where.pack(side='left', padx=5)
-        ttk.Button(row, text='Apply', command=self.apply_window, width=6).pack(side='right')
+        # The options of the selected samples.
+        options = ttk.Frame(box)
+        options.pack(side='bottom', fill='x', pady=(6, 0))
+        options.columnconfigure(2, weight=1)
+        ttk.Label(options, text='Look in').grid(row=0, column=0, sticky='w')
+        self.where = WhereField(options)
+        self.where.grid(row=0, column=1, sticky='w', padx=5, pady=1)
+        ttk.Label(options, text='Also cut').grid(row=1, column=0, sticky='w')
+        self.extend = ExtendField(options)
+        self.extend.grid(row=1, column=1, sticky='w', padx=5, pady=1)
+        ttk.Button(options, text='Apply', command=self.apply_options, width=6).grid(
+            row=0, column=2, rowspan=2, sticky='e')
 
-        frame, self.tree = make_tree(box, [('where', 'Look in', 95, 'w'), ('length', 'Length', 75, 'e')],
+        frame, self.tree = make_tree(box, [('where', 'Look in', 85, 'w'), ('extend', 'Also cut', 95, 'w'),
+                                           ('length', 'Length', 65, 'e')],
                                      heading='Sample', height=4)
         frame.pack(fill='both', expand=True)
         on_check(self.tree, self.toggle)
@@ -131,6 +142,7 @@ class SamplesPanel(ttk.Frame):
         self.folder = folder
         self.samples = list_samples(folder)
         self.windows = read_windows(folder)
+        self.extensions = read_extensions(folder)
         self.tree.delete(*self.tree.get_children())
         for index, path in enumerate(self.samples):
             try:
@@ -138,7 +150,8 @@ class SamplesPanel(ttk.Frame):
             except RuntimeError:
                 length = 'unreadable'
                 self.unchecked.add(path)
-            self.tree.insert('', 'end', iid=str(index), values=(describe_window(self.window(path)), length))
+            self.tree.insert('', 'end', iid=str(index), values=(
+                describe_window(self.window(path)), describe_extension(self.extension(path)), length))
             self._label(index)
         self.app.changed()
 
@@ -154,32 +167,41 @@ class SamplesPanel(ttk.Frame):
             return self.windows.get(os.path.basename(path))
         return window_of(path)
 
+    def extension(self, path):
+        """What is cut beyond this sample's match (None: nothing more)."""
+        if os.path.dirname(path) == self.folder:
+            return self.extensions.get(os.path.basename(path))
+        return extension_of(path)
+
     def _load_where(self):
-        """Show the window of the first selected sample."""
+        """Show the options of the first selected sample."""
         selection = self.tree.selection()
         if selection:
-            self.where.set(self.window(self.samples[int(selection[0])]))
+            path = self.samples[int(selection[0])]
+            self.where.set(self.window(path))
+            self.extend.set(self.extension(path))
 
-    def apply_window(self):
-        """Give the selected samples the window shown."""
+    def apply_options(self):
+        """Give the selected samples the Look in and Also cut shown."""
         paths = [self.samples[int(row)] for row in self.tree.selection()]
         if not paths:
             self.app.report('Select one or more samples first.')
             return
         try:
-            window = self.where.get()
+            window, extension = self.where.get(), self.extend.get()
         except ValueError as exc:
-            messagebox.showwarning('Look in', str(exc), parent=self)
+            messagebox.showwarning('Sample options', str(exc), parent=self)
             return
         try:
             for path in paths:
                 write_window(self.folder, os.path.basename(path), window)
+                write_extension(self.folder, os.path.basename(path), extension)
         except OSError as exc:
-            messagebox.showerror('Look in', str(exc), parent=self)
+            messagebox.showerror('Sample options', str(exc), parent=self)
         selection = self.tree.selection()
         self.use_folder(self.folder)
         self.tree.selection_set(selection)
-        self.app.report(f'{len(paths)} sample(s) now looked for {phrase(window)}. '
+        self.app.report(f'{len(paths)} sample(s) now looked for {phrase(window)}{extension_phrase(extension)}. '
                         'Search the videos again to use it.')
 
     def selected_samples(self):
@@ -280,20 +302,22 @@ class SamplesPanel(ttk.Frame):
             messagebox.showwarning('Save sample', str(exc), parent=self)
             return
         try:
-            window = self.new_where.get()
+            window, extension = self.new_where.get(), self.new_extend.get()
         except ValueError as exc:
             messagebox.showwarning('Save sample', str(exc), parent=self)
             return
-        self.add_sample(self.video, start, end, self.name.get(), window=window)
+        self.add_sample(self.video, start, end, self.name.get(), window=window, extension=extension)
 
-    def add_sample(self, video, start, end, name, saved=None, window=None):
-        """Save [start, end) of the video as a sample of the current set, ticked, looked for in window."""
+    def add_sample(self, video, start, end, name, saved=None, window=None, extension=None):
+        """Save [start, end) of the video as a sample of the current set, ticked, with its options."""
         folder = self.folder
 
         def work(_item, _progress, _log, _cancelled):
             path = save_sample(video, start, end, folder, name)
             if window:
                 write_window(folder, os.path.basename(path), window)
+            if extension:
+                write_extension(folder, os.path.basename(path), extension)
             return path
 
         result = {}
@@ -311,7 +335,7 @@ class SamplesPanel(ttk.Frame):
             if not path:
                 return
             self.app.report(f'Saved {os.path.basename(path)} ({end - start:.2f} s) in the sample set '
-                            f'"{os.path.basename(folder)}", looked for {phrase(window)}.')
+                            f'"{os.path.basename(folder)}", looked for {phrase(window)}{extension_phrase(extension)}.')
             if saved:
                 saved(path)
 
@@ -351,6 +375,10 @@ class SamplesPanel(ttk.Frame):
             if window:
                 write_window(self.folder, os.path.basename(path), None)
                 write_window(self.folder, os.path.basename(new), window)
+            extension = self.extensions.get(os.path.basename(path))
+            if extension:
+                write_extension(self.folder, os.path.basename(path), None)
+                write_extension(self.folder, os.path.basename(new), extension)
         except OSError as exc:
             messagebox.showerror('Rename sample', str(exc), parent=self)
             return
@@ -379,6 +407,7 @@ class SamplesPanel(ttk.Frame):
                 os.unlink(path)
                 self.unchecked.discard(path)
                 write_window(os.path.dirname(path), os.path.basename(path), None)
+                write_extension(os.path.dirname(path), os.path.basename(path), None)
             except OSError as exc:
                 failed.append(f'{os.path.basename(path)}: {exc}')
         if failed:

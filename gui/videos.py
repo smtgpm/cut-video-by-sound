@@ -209,10 +209,12 @@ class VideosPanel(ttk.Frame):
             except OSError:
                 continue
         base = (tuple(samples), threshold, intro_max, bool(self.several.get()), min_match)
-        # Only there when a sample has one, so other searches stay comparable.
+        # Per-sample options (Look in, Also cut), only there when a sample has
+        # one, so other searches stay comparable.
         panel = self.app.panels['samples']
-        windows = tuple((path, panel.window(path)) for path, _ in samples if panel.window(path))
-        return base + (windows,) if windows else base
+        options = tuple((path, panel.window(path), panel.extension(path)) for path, _ in samples
+                        if panel.window(path) or panel.extension(path))
+        return base + (options,) if options else base
 
     def worker_count(self):
         try:
@@ -257,7 +259,9 @@ class VideosPanel(ttk.Frame):
                 parent=self):
             return
         threshold, intro_max, several, min_match = settings[1:5]
-        windows = dict(settings[5]) if len(settings) > 5 else {}
+        options = settings[5] if len(settings) > 5 else ()
+        windows = {path: window for path, window, _ in options if window}
+        extensions = {path: extension for path, _, extension in options if extension}
         # Decided here, on the Tk thread: the workers never read the episodes.
         jobs = {}
         for episode in episodes:
@@ -268,7 +272,7 @@ class VideosPanel(ttk.Frame):
         def work(episode, progress, _log, cancelled):
             paths, kept = jobs[episode.path]
             return scan_video(episode.path, paths, threshold=threshold, intro_max=intro_max,
-                              several_per_sample=several, min_waveform=min_match, windows=windows, keep=kept,
+                              several_per_sample=several, min_waveform=min_match, windows=windows, extensions=extensions, keep=kept,
                               progress=progress, cancelled=cancelled)
 
         def finished(episode, result, error):

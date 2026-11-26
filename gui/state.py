@@ -10,6 +10,12 @@ PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAVED = 'saved review'  # scanned_with of a video whose cuts come from reviews.json
 
 
+def at(place, cut) -> bool:
+    """Whether the cut is on this place where its sample was heard: around it,
+    as a cut stretched by its sample's "Also cut" is (half a second of slack)."""
+    return place.start >= cut.start - 0.5 and place.end <= cut.end + 0.5
+
+
 @dataclass
 class Episode:
     path: str
@@ -86,12 +92,16 @@ class Episode:
             return 'Waits for new samples' if self.skip_samples else 'Needs re-scan'
         return cuts if count else 'No cuts'
 
+    def place_of(self, cut) -> Optional[int]:
+        """Which of alternatives(cut) the cut is on, or None (moved by hand)."""
+        return next((i for i, place in enumerate(self.alternatives(cut)) if at(place, cut)), None)
+
     def alternatives(self, cut) -> List[Cut]:
         """Where else this cut's sample was heard, best first (the cut's own place included)."""
         if not cut.sample:
             return []
         others = [c for c in self.cuts if c is not cut and c.sample == cut.sample]
         places = [c for c in self.candidates if c.sample == cut.sample
-                  and not any(abs(c.start - o.start) < 0.5 for o in others)]
+                  and not any(at(c, o) for o in others)]
         # Equal scores (to 0.1 %): the earlier place first.
         return sorted(places, key=lambda c: (-round(c.waveform, 3), c.start))

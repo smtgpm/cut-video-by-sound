@@ -87,6 +87,15 @@ an intro that always opens the episode), or **Starts in the last** X seconds
 (for an outro). A match starting elsewhere is ignored. The "Look in" column shows each sample's setting. It is saved in
 `search-windows.json` in the set's folder, so the command line uses it too.
 
+**Also cut** removes more than the sample itself: **Everything before** its
+match, or **Everything after** it, up to the number of seconds you give. For
+example an outro with "Everything after, up to 120 s" also cuts the credits
+or the trailer that follow it. The cuts are chosen on the matches alone,
+then stretched; a stretched cut stops at the start or end of the video, and
+at any other cut, so it never swallows another one. It is set in the same
+places as Look in, shown in the "Also cut" column, and saved in
+`cut-extensions.json` in the set's folder (the command line uses it too).
+
 Start the sample exactly on the passage, or just inside it. If it begins with
 a bit of the previous scene, episodes where the passage comes right at 0:00
 will not match.
@@ -148,8 +157,9 @@ unticked, and overlapping ticked cuts are flagged.
 - "+ Add cut at playhead" adds a cut by hand.
 - **Save as sample…** saves the selected cut, as you adjusted it, as a new
   sample of the current set (ticked), for example a longer outro. It asks
-  for its name and where to look for it, starting from the original
-  sample's "Look in".
+  for its name, where to look for it and what else to cut, starting from
+  the original sample's settings. If the cut includes its "Also cut" part,
+  the dialog says so: the new sample would include it too.
 Then decide:
 
 - **✓ Validate, reviewed**: the cuts are right. The video is saved with its
@@ -208,7 +218,7 @@ python cli_remove.py --refs refs/my-series --videos "Season 1" "Season 2" specia
 
 Every `.wav` file in `--refs` is a sample: the app saves its samples as
 `refs/<set name>/*.wav`, so a set can be used directly, with the "Look in"
-windows set in the app (`search-windows.json` in that folder). That command creates
+and "Also cut" settings made in the app (the JSON files in that folder). That command creates
 `cleaned/Season 1_cleaned/`, `cleaned/Season 2_cleaned/`, and
 `cleaned/special_cleaned.mkv`.
 
@@ -298,6 +308,7 @@ All next to the program, and not part of the repository:
 |---|---|
 | `refs/<set>/*.wav` | your samples, one folder per set |
 | `refs/<set>/search-windows.json` | where each sample of the set is looked for, when not anywhere |
+| `refs/<set>/cut-extensions.json` | what is also cut before or after a sample's match |
 | `sessions/<name>.json` | each session: videos, cuts, review state, samples ticked, settings |
 | `reviews.json` | the videos you validated or sent back, in any session: adding the same file again, even in another session, brings its review back. An entry only applies while the file keeps the same size and date |
 
