@@ -21,9 +21,12 @@ class Episode:
     included: bool = True
     reviewed: bool = False  # ticked off in the review: kept, never searched again
     needs_rescan: bool = False  # sent back from the review for a new search
-    # With "Not with the current samples": the search settings when it was sent
-    # back. It is only searched again once there is a new sample or setting.
-    rescan_after: Optional[tuple] = None
+    # With "Keep selected samples": the samples this video is never searched
+    # with again. Their ticked cuts are kept; only newer samples are searched.
+    skip_samples: Optional[frozenset] = None
+    # Every place each sample was heard, from the last search: the review can
+    # move a cut to its sample's next best match.
+    candidates: List[Cut] = field(default_factory=list)
     status: str = 'Not scanned'
     error: str = ''
     output: str = ''
@@ -42,17 +45,23 @@ class Episode:
         """Reviewed or cut by hand. Others must never be exported as 'clean'."""
         return self.scanned_with is not None or bool(self.segments)
 
+    def search_samples(self, settings) -> list:
+        """The ticked samples this video is searched with (not the skipped ones)."""
+        skip = self.skip_samples or ()
+        return [path for path, _ in settings[0] if path not in skip] if settings else []
+
+    def kept(self, cut) -> bool:
+        """A match kept with "Keep selected samples": a new search leaves it alone."""
+        return bool(cut.sample and self.skip_samples and cut.sample in self.skip_samples)
+
     def waiting(self, settings) -> bool:
-        """Sent back to wait for new samples, and none has been added since."""
-        if not (self.needs_rescan and self.rescan_after) or settings is None:
-            return False
-        samples, *others = settings
-        old_samples, *old_others = self.rescan_after
-        return set(samples) <= set(old_samples) and others == old_others
+        """Sent back keeping its samples, and no new sample has been added since."""
+        return bool(self.needs_rescan and self.skip_samples and settings
+                    and not self.search_samples(settings))
 
     def to_search(self, settings) -> bool:
         """Whether "Find matches" searches this video with these settings."""
-        if self.reviewed or self.waiting(settings):
+        if self.reviewed or (self.skip_samples and not self.search_samples(settings)):
             return False
         # Cuts restored from reviews.json are kept: no new search for them.
         return self.needs_rescan or self.scanned_with is None or (
@@ -65,5 +74,15 @@ class Episode:
         if self.reviewed:
             return f'Reviewed, {cuts}'
         if self.needs_rescan:
-            return 'Waits for new samples' if self.rescan_after else 'Needs re-scan'
+            return 'Waits for new samples' if self.skip_samples else 'Needs re-scan'
         return cuts if count else 'No cuts'
+
+    def alternatives(self, cut) -> List[Cut]:
+        """Where else this cut's sample was heard, best first (the cut's own place included)."""
+        if not cut.sample:
+            return []
+        others = [c for c in self.cuts if c is not cut and c.sample == cut.sample]
+        places = [c for c in self.candidates if c.sample == cut.sample
+                  and not any(abs(c.start - o.start) < 0.5 for o in others)]
+        # Equal scores (to 0.1 %): the earlier place first.
+        return sorted(places, key=lambda c: (-round(c.waveform, 3), c.start))

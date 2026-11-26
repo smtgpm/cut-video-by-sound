@@ -3,8 +3,8 @@ Review decisions kept between sessions, in reviews.json next to the app.
 
 A video validated in the review is remembered with its cuts: added again, even
 after a restart, it comes back reviewed and is not searched again. A video
-sent back with "Needs re-scan" is remembered too, with its cuts and, when it
-waits for new samples, the samples it must not be searched with again.
+sent back with "Needs re-scan" is remembered too, with its cuts and, with
+"Keep selected samples", the samples it is never searched with again.
 
 An entry only applies to the same file: if its size or date changes, it is
 ignored.
@@ -47,12 +47,6 @@ def _identity(path):
     return info.st_size, round(info.st_mtime, 3)
 
 
-def _settings_from_json(value):
-    """JSON turned the settings tuple into lists: back to the same tuple."""
-    samples, *others = value
-    return (tuple((path, mtime) for path, mtime in samples), *others)
-
-
 def save(episode):
     """Remember the video's review state and cuts (forgets it if neither reviewed nor sent back)."""
     if not (episode.reviewed or episode.needs_rescan):
@@ -66,8 +60,9 @@ def save(episode):
     data[episode.path] = {
         'size': size, 'mtime': mtime,
         'state': 'reviewed' if episode.reviewed else 'rescan',
-        'rescan_after': episode.rescan_after,
+        'skip_samples': sorted(episode.skip_samples) if episode.skip_samples else None,
         'cuts': [asdict(cut) for cut in episode.cuts],
+        'candidates': [asdict(cut) for cut in episode.candidates],
     }
     _write(data)
 
@@ -84,13 +79,17 @@ def restore(episode):
     try:
         if not entry or (entry['size'], entry['mtime']) != _identity(episode.path):
             return False
-        cuts = [Cut(**{k: v for k, v in cut.items() if k in _CUT_FIELDS}) for cut in entry['cuts']]
+        cuts, candidates = ([Cut(**{k: v for k, v in cut.items() if k in _CUT_FIELDS}) for cut in entry.get(key, [])]
+                            for key in ('cuts', 'candidates'))
         rescan = entry.get('state') == 'rescan'
-        after = entry.get('rescan_after')
-        after = _settings_from_json(after) if rescan and after else None
+        skip = entry.get('skip_samples')
+        if skip is None and entry.get('rescan_after'):
+            # Older entries: "not with these samples".
+            skip = [path for path, _ in entry['rescan_after'][0]]
+        skip = frozenset(skip) if skip else None
     except (OSError, KeyError, TypeError, ValueError):
         return False
-    episode.cuts, episode.scanned_with = cuts, SAVED
-    episode.reviewed, episode.needs_rescan, episode.rescan_after = not rescan, rescan, after
+    episode.cuts, episode.candidates, episode.scanned_with = cuts, candidates, SAVED
+    episode.reviewed, episode.needs_rescan, episode.skip_samples = not rescan, rescan, skip
     episode.status = episode.describe()
     return True

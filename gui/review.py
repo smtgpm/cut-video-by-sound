@@ -230,22 +230,24 @@ class ReviewPanel(ttk.Frame):
         row.pack(fill='x')
         self.add_button = ttk.Button(row, text='+ Add cut at playhead', command=self.add)
         self.add_button.pack(side='left')
+        self.next_match_button = ttk.Button(row, text='⇄ Next best match', command=self.next_match)
+        self.next_match_button.pack(side='right')
 
         # The decision on this video.
         row = ttk.Frame(bottom)
         row.pack(fill='x', pady=(8, 0))
         self.rescan_button = ttk.Button(row, text='↻ Needs re-scan', command=self.needs_rescan)
         self.rescan_button.pack(side='left')
-        self.wait_for_new = tk.BooleanVar(value=False)
-        self.wait_check = ttk.Checkbutton(row, text='Not with the current samples', variable=self.wait_for_new)
-        self.wait_check.pack(side='left', padx=6)
+        self.keep_selected = tk.BooleanVar(value=False)
+        self.keep_check = ttk.Checkbutton(row, text='Keep selected samples', variable=self.keep_selected)
+        self.keep_check.pack(side='left', padx=6)
         self.done_button = ttk.Button(row, text='✓ Validate, reviewed', style='Primary.TButton',
                                       command=self.reviewed)
         self.done_button.pack(side='right')
 
         frame, self.tree = make_tree(
             self, [('start', 'Start', 78, 'e'), ('end', 'End', 78, 'e'),
-                   ('length', 'Length', 58, 'e'), ('match', 'Match', 80, 'w')],
+                   ('length', 'Length', 58, 'e'), ('match', 'Match', 112, 'w')],
             heading='Cut', width=150, height=4, show='tree headings')
         frame.pack(fill='both', expand=True)
         on_check(self.tree, lambda row: self.toggle_cut(self.rows.get(row)))
@@ -275,24 +277,36 @@ class ReviewPanel(ttk.Frame):
         episode = self.episode
         if not episode:
             return
-        episode.reviewed, episode.needs_rescan, episode.rescan_after = True, False, None
+        episode.reviewed, episode.needs_rescan = True, False
         self._done_with(episode, 'Every video is reviewed. Next: export.')
 
     def needs_rescan(self):
         """
-        Send the video back to step 2 for a new search. With "Not with the
-        current samples", it waits until a sample is added (or a setting changed).
+        Send the video back to step 2 for a new search.
+
+        With "Keep selected samples", the ticked cuts are kept, the unticked
+        ones dropped, and the samples it was searched with are never used on it
+        again: only samples added later are searched, so dropped suggestions
+        cannot come back. Without it, everything is searched again.
         """
         episode = self.episode
         if not episode or self.app.tasks.busy:
             return
-        settings = self.app.panels['videos'].settings()
         episode.reviewed, episode.needs_rescan = False, True
-        episode.rescan_after = settings if self.wait_for_new.get() and settings else None
-        if episode.rescan_after:
-            note = 'it waits for a new sample: add one in step 1, then "Find matches" in step 2.'
+        if self.keep_selected.get():
+            settings = self.app.panels['videos'].settings()
+            used = {path for path, _ in settings[0]} if settings else set()
+            used |= {c.sample for c in episode.cuts if c.sample}
+            episode.skip_samples = frozenset(used | (episode.skip_samples or set()))
+            episode.cuts = [c for c in episode.cuts if c.enabled or not c.sample]
+            self.cut = None
+            kept = sum(1 for c in episode.cuts if c.sample)
+            note = (f'{kept} ticked cut(s) kept. Only samples added from now on will be searched in it: '
+                    'add one in step 1, then "Find matches" in step 2.')
         else:
-            note = 'it will be searched again by "Find matches" in step 2.'
+            episode.skip_samples = None
+            note = 'it will be searched again with every ticked sample by "Find matches" in step 2.'
+        episode.output, episode.junctions = '', []
         self._done_with(episode, f'{episode.name}: {note}')
 
     def _done_with(self, episode, finished_text):
@@ -397,7 +411,9 @@ class ReviewPanel(ttk.Frame):
             control.config(state=state)
         self.toggle_button.config(text='Untick' if cut and cut.enabled else 'Tick')
         self.add_button.config(state='normal' if self.episode and not busy else 'disabled')
-        for widget in (self.done_button, self.rescan_button, self.wait_check):
+        more = cut and self.episode and len(self.episode.alternatives(cut)) > 1 and not busy
+        self.next_match_button.config(state='normal' if more else 'disabled')
+        for widget in (self.done_button, self.rescan_button, self.keep_check):
             widget.config(state='normal' if self.episode and not busy else 'disabled')
 
     def toggle_cut(self, cut):
@@ -500,6 +516,27 @@ class ReviewPanel(ttk.Frame):
         self._edited()
         self.app.report('Cut added. Drag its end in the box below, or move the playhead there and press O.')
 
+    def next_match(self):
+        """Move the selected cut to the next place its sample was heard, best first, then round."""
+        cut, episode = self.cut, self.episode
+        if not cut or not episode or self.app.tasks.busy:
+            return
+        places = episode.alternatives(cut)
+        if len(places) < 2:
+            self.app.report('The search found this sample nowhere else in this video.')
+            return
+        here = next((i for i, c in enumerate(places) if abs(c.start - cut.start) < 0.5), -1)
+        index = (here + 1) % len(places)
+        place = places[index]
+        cut.start, cut.end, cut.score, cut.waveform = place.start, place.end, place.score, place.waveform
+        cut.edited = False
+        self.editor.fit(cut)
+        self._edited()
+        self.select_cut(cut, refit=False)
+        name = os.path.splitext(os.path.basename(cut.sample))[0]
+        self.app.report(f'{name}: match {index + 1} of {len(places)}, {cut.waveform:.0%} at '
+                        f'{format_time(cut.start)}. Click again for the next one.')
+
     def delete(self):
         if self.cut and not self.app.tasks.busy:
             self.episode.cuts.remove(self.cut)
@@ -588,7 +625,12 @@ class ReviewPanel(ttk.Frame):
             if not cut.sample:
                 match = 'by hand'
             else:
-                match = f'{max(0, cut.waveform):.0%}' + (' edited' if cut.edited else '')
+                match = f'{max(0, cut.waveform):.0%}' + (' kept' if self.episode.kept(cut) else
+                                                          ' edited' if cut.edited else '')
+                places = self.episode.alternatives(cut)
+                if len(places) > 1:
+                    rank = next((i for i, c in enumerate(places) if abs(c.start - cut.start) < 0.5), None)
+                    match += f'  {rank + 1}/{len(places)}' if rank is not None else f'  ·/{len(places)}'
                 tags = ('warning',) if cut.doubtful else ()
             if not cut.enabled:
                 tags = ('off',)

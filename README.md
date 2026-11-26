@@ -93,6 +93,9 @@ settings, nor those waiting for a new sample (see below).
 To review a video again, select it (or the whole "Reviewed" group) and click
 **Unreview**: it goes back to the review with its cuts, without a new search.
 
+Double-click a video to open it in the review (a reviewed one is just
+played).
+
 ### 3. Review cuts
 
 The review goes through the videos not reviewed yet, one at a time (◀ ▶ or
@@ -104,6 +107,10 @@ Doubtful matches (a similar sound, but not a copy of the sample) start
 unticked, and overlapping ticked cuts are flagged.
 
 - Click a tick to keep or drop a cut. Click a row to adjust it.
+- **⇄ Next best match** moves the selected cut to the next place its sample
+  was heard, best first, then back round. "2/3" in the Match column means the
+  cut is on the second best of three places. Useful when an intro landed on
+  the copy of its tune inside the outro.
 - The selected cut is shown on a zoomed timeline: drag its edges, scroll to
   zoom, or nudge each edge by 1 s, 0.1 s or one frame. "Here (I/O)" moves an
   edge to the playhead.
@@ -117,10 +124,13 @@ Then decide, and the next video opens:
   back reviewed.
 - **↻ Needs re-scan**: the video goes back to step 2, to be searched again by
   the next "Find matches". Cuts you added by hand are kept.
-  With **Not with the current samples** ticked, it waits instead: it is only
-  searched again once you add a sample in step 1 (or change a search
-  setting), since searching again with the same samples would find the same
-  thing. This choice is saved too.
+  With **Keep selected samples** ticked, the ticked cuts are kept as they
+  are, the unticked ones are dropped, and the samples this video was searched
+  with are never used on it again. So the next search only uses samples you
+  add afterwards (in step 1), it cannot bring back the suggestions you
+  dropped, and its new matches never overlap the kept cuts. Until there is a
+  new sample, the video waits ("Waits for new samples"). This choice is saved
+  too.
 
 | Key | Action |
 |---|---|

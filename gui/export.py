@@ -245,7 +245,7 @@ class ExportPanel(ttk.Frame):
                 episode.duration = timeline.map(round(episode.duration * 1000)) / 1000
                 episode.path = episode.output = result.output
                 episode.cuts, episode.scanned_with, episode.reviewed = [], None, False
-                episode.needs_rescan, episode.rescan_after = False, None
+                episode.needs_rescan, episode.skip_samples = False, None
                 episode.junctions = [timeline.map(a) / 1000 for a, _ in timeline.cuts]
                 episode.status = 'Replaced, with warnings' if result.warnings else 'Replaced'
                 results['done'] += 1

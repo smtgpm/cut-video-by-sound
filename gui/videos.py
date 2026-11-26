@@ -7,7 +7,7 @@ from tkinter import messagebox, ttk
 from gui import dialogs, reviews
 from gui.common import make_tree, shorten
 from gui.state import Episode
-from pipeline import VIDEO_EXTENSIONS, default_workers, expand_video_inputs, media_info, scan_video
+from pipeline import VIDEO_EXTENSIONS, Cut, default_workers, expand_video_inputs, media_info, scan_video
 from remove_segments import Cancelled
 from subtitles import find_sidecars
 
@@ -30,7 +30,7 @@ class VideosPanel(ttk.Frame):
         self.unreview_button = ttk.Button(row, text='Unreview', command=self.unreview, width=9)
         self.unreview_button.pack(side='right')
         ttk.Label(self, style='Muted.TLabel',
-                  text='A folder adds every video in it and in its subfolders. Double-click to play. '
+                  text='A folder adds every video in it and in its subfolders. Double-click to review. '
                        'Reviewed videos are kept apart: "Unreview" sends them back to the review.',
                   wraplength=500, justify='left',
                   ).pack(anchor='w', pady=6)
@@ -71,7 +71,7 @@ class VideosPanel(ttk.Frame):
                    ('status', 'Status', 125, 'w')],
             heading='Video', width=190, height=5, selectmode='extended')
         frame.pack(fill='both', expand=True)
-        self.tree.bind('<Double-1>', lambda _event: self.play())
+        self.tree.bind('<Double-1>', self.open_review)
         self.tree.bind('<<TreeviewSelect>>', lambda _event: self._update_unreview())
 
     def ask_folder(self):
@@ -180,11 +180,18 @@ class VideosPanel(ttk.Frame):
         self.app.report(f'{len(episodes)} video(s) back in the review, with their cuts.')
         self.app.changed()
 
-    def play(self):
-        paths = {e.path for e in self.app.episodes}
-        selection = [row for row in self.tree.selection() if row in paths]
-        if selection:
-            self.app.load(selection[0])
+    def open_review(self, _event=None):
+        """Double-click: review this video. A reviewed one is only played (Unreview it to review it)."""
+        row = self.tree.identify_row(_event.y) if _event else ''
+        episode = next((e for e in self.app.episodes if e.path == row), None)
+        if episode is None:
+            return
+        if episode.reviewed:
+            self.app.load(episode.path)
+            self.app.report(f'{episode.name} is reviewed: click "Unreview" to review it again.')
+            return
+        self.app.show('review')
+        self.app.panels['review'].show_episode(episode)
 
     def settings(self):
         """Everything a scan's results depend on."""
@@ -229,21 +236,26 @@ class VideosPanel(ttk.Frame):
                 'with these samples, or waiting for a new sample.\n\n'
                 'To search one again, open it in step 3 and click "Needs re-scan".', parent=self)
             return
-        if any(c.sample and c.edited for e in episodes for c in e.cuts) and not messagebox.askyesno(
+        if any(c.sample and c.edited and not e.kept(c) for e in episodes for c in e.cuts) and not messagebox.askyesno(
                 'Find matches',
                 'Searching again replaces the matches you edited. Cuts added by hand are kept. Continue?',
                 parent=self):
             return
-        samples, threshold, intro_max, several, min_match = settings
-        paths = [path for path, _ in samples]
+        _samples, threshold, intro_max, several, min_match = settings
+        # Decided here, on the Tk thread: the workers never read the episodes.
+        jobs = {}
         for episode in episodes:
             episode.status, episode.error = 'Queued', ''
+            kept = [Cut(c.start, c.end) for c in episode.cuts if c.enabled and episode.kept(c)]
+            jobs[episode.path] = episode.search_samples(settings), kept
 
         def work(episode, progress, _log, cancelled):
+            paths, kept = jobs[episode.path]
             return scan_video(episode.path, paths, threshold=threshold, intro_max=intro_max,
-                              several_per_sample=several, min_waveform=min_match, progress=progress, cancelled=cancelled)
+                              several_per_sample=several, min_waveform=min_match, keep=kept,
+                              progress=progress, cancelled=cancelled)
 
-        def finished(episode, cuts, error):
+        def finished(episode, result, error):
             if isinstance(error, Cancelled):
                 episode.status = 'Scan cancelled'
             elif error:
@@ -251,11 +263,13 @@ class VideosPanel(ttk.Frame):
                 # Old results must not pass for current ones.
                 episode.scanned_with = None
             else:
-                episode.cuts = sorted([c for c in episode.cuts if not c.sample] + cuts,
+                cuts, candidates = result
+                episode.candidates = [c for c in episode.candidates if episode.kept(c)] + candidates
+                # Cuts added by hand, and those kept with "Keep selected samples", stay.
+                episode.cuts = sorted([c for c in episode.cuts if not c.sample or episode.kept(c)] + cuts,
                                       key=lambda c: c.start)
                 episode.scanned_with = settings
                 episode.reviewed = episode.needs_rescan = False
-                episode.rescan_after = None
                 reviews.forget(episode.path)
                 count = len(episode.segments)
                 episode.status = f'{count} cut{"s" * (count != 1)}' if count else 'No match'

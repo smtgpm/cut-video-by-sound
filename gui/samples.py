@@ -90,6 +90,7 @@ class SamplesPanel(ttk.Frame):
         frame.pack(fill='both', expand=True)
         on_check(self.tree, self.toggle)
         self.tree.bind('<Double-1>', lambda _event: self.listen())
+        self.tree.bind('<Delete>', lambda _event: self.delete())
 
     # ---------- Sets ----------
     def refresh_sets(self, select=None):
@@ -276,20 +277,34 @@ class SamplesPanel(ttk.Frame):
         self.use_folder(self.folder)
 
     def delete(self):
-        path = self.current()
-        if not path or self.app.tasks.busy:
+        """Delete every selected sample, after one confirmation."""
+        paths = [self.samples[int(row)] for row in self.tree.selection()]
+        if not paths:
+            self.app.report('Select one or more samples first.')
             return
-        if not messagebox.askyesno('Delete sample',
-                                   f'Permanently delete this file?\n\n{path}', parent=self):
+        if self.app.tasks.busy:
             return
-        if self.app.player.path == os.path.abspath(path):
-            self.app.player.close_media()
-        try:
-            os.unlink(path)
-        except OSError as exc:
-            messagebox.showerror('Delete sample', str(exc), parent=self)
+        names = '\n'.join(os.path.basename(path) for path in paths[:15])
+        if len(paths) > 15:
+            names += f'\n… and {len(paths) - 15} more'
+        question = (f'Permanently delete this file?\n\n{paths[0]}' if len(paths) == 1 else
+                    f'Permanently delete these {len(paths)} samples?\n\n{names}')
+        if not messagebox.askyesno('Delete samples', question, parent=self):
             return
+        failed = []
+        for path in paths:
+            if self.app.player.path == os.path.abspath(path):
+                self.app.player.close_media()
+            try:
+                os.unlink(path)
+                self.unchecked.discard(path)
+            except OSError as exc:
+                failed.append(f'{os.path.basename(path)}: {exc}')
+        if failed:
+            messagebox.showerror('Delete samples', '\n'.join(failed[:12]), parent=self)
         self.use_folder(self.folder)
+        deleted = len(paths) - len(failed)
+        self.app.report(f'{deleted} sample{"s" * (deleted != 1)} deleted.')
 
     # ---------- Called by the app ----------
     def activate(self):

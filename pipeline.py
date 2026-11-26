@@ -7,7 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Callable, Dict, Iterable, List, Sequence, Tuple
 
 from audio_match import find_matches, load_target, playback_origin
@@ -305,16 +305,21 @@ def scan_video(
     intro_max: float = 180.0,
     several_per_sample: bool = False,
     min_waveform: float = 0.0,
+    keep: Sequence[Cut] = (),
     progress: Callable[[float], None] = lambda fraction: None,
     cancelled: Callable[[], bool] = lambda: False,
-) -> List[Cut]:
+) -> Tuple[List[Cut], List[Cut]]:
     """
-    Every match, for review. The ticked ones are chosen together, over all
+    (cuts, candidates). cuts: every match, for review. The ticked ones are chosen together, over all
     samples: the plausible matches (not doubtful) with the highest total
     waveform score that do not overlap, one per sample unless
     several_per_sample is set (see choose_cuts). Unticked matches overlapping
     a ticked one are left out, as are matches whose waveform score is below
-    min_waveform.
+    min_waveform. Matches over a cut in `keep` (cuts already decided on) are
+    dropped, or trimmed where they only touch it.
+
+    candidates: every place each sample was heard, untrimmed, so the review
+    can move a cut to its sample's next best match.
     """
     if cancelled():
         raise Cancelled()
@@ -333,6 +338,8 @@ def scan_video(
         ]
         progress(0.3 + 0.7 * (number + 1) / len(samples))
 
+    candidates = [replace(cut, enabled=False) for cut in cuts]
+    cuts = claim(cuts, list(keep))
     chosen, others = settle_cuts(cuts, lambda cut: cut.sample, lambda cut: cut.waveform,
                                  one_per_sample=not several_per_sample,
                                  eligible=lambda cut: not cut.doubtful)
@@ -340,7 +347,7 @@ def scan_video(
         cut.enabled = True
     for cut in others:
         cut.enabled = False
-    return sorted(chosen + others, key=lambda cut: cut.start)
+    return sorted(chosen + others, key=lambda cut: cut.start), candidates
 
 
 def export_video(
