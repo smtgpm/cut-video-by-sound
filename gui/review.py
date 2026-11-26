@@ -2,7 +2,7 @@
 
 import os
 import tkinter as tk
-from tkinter import ttk
+from tkinter import simpledialog, ttk
 
 from gui.common import (ACCENT, BORDER, CHECKED, CUT, DISABLED_CUT, FIELD, MUTED, TEXT,
                         UNCHECKED, WARNING, format_time, make_tree, on_check, parse_time, shorten)
@@ -230,20 +230,27 @@ class ReviewPanel(ttk.Frame):
         row.pack(fill='x')
         self.add_button = ttk.Button(row, text='+ Add cut at playhead', command=self.add)
         self.add_button.pack(side='left')
+        self.sample_button = ttk.Button(row, text='Save as sample…', command=self.save_as_sample)
+        self.sample_button.pack(side='left', padx=5)
         self.next_match_button = ttk.Button(row, text='⇄ Next best match', command=self.next_match)
         self.next_match_button.pack(side='right')
 
         # The decision on this video.
         row = ttk.Frame(bottom)
         row.pack(fill='x', pady=(8, 0))
-        self.rescan_button = ttk.Button(row, text='↻ Needs re-scan', command=self.needs_rescan)
-        self.rescan_button.pack(side='left')
-        self.keep_selected = tk.BooleanVar(value=False)
-        self.keep_check = ttk.Checkbutton(row, text='Keep selected samples', variable=self.keep_selected)
-        self.keep_check.pack(side='left', padx=6)
         self.done_button = ttk.Button(row, text='✓ Validate, reviewed', style='Primary.TButton',
                                       command=self.reviewed)
-        self.done_button.pack(side='right')
+        self.done_button.pack(side='right', anchor='s')
+        rescan = ttk.Frame(row)
+        rescan.pack(side='left')
+        self.rescan_now_button = ttk.Button(rescan, text='↻ Re-scan now', command=self.rescan_now)
+        self.rescan_now_button.grid(row=0, column=0, sticky='w')
+        self.rescan_button = ttk.Button(rescan, text='Needs re-scan', command=self.needs_rescan)
+        self.rescan_button.grid(row=0, column=1, sticky='w', padx=5)
+        self.keep_selected = tk.BooleanVar(value=False)
+        self.keep_check = ttk.Checkbutton(rescan, text='Keep selected samples (search only new ones)',
+                                          variable=self.keep_selected)
+        self.keep_check.grid(row=1, column=0, columnspan=2, sticky='w', pady=(4, 0))
 
         frame, self.tree = make_tree(
             self, [('start', 'Start', 78, 'e'), ('end', 'End', 78, 'e'),
@@ -281,33 +288,70 @@ class ReviewPanel(ttk.Frame):
         self._done_with(episode, 'Every video is reviewed. Next: export.')
 
     def needs_rescan(self):
-        """
-        Send the video back to step 2 for a new search.
-
-        With "Keep selected samples", the ticked cuts are kept, the unticked
-        ones dropped, and the samples it was searched with are never used on it
-        again: only samples added later are searched, so dropped suggestions
-        cannot come back. Without it, everything is searched again.
-        """
+        """Send the video back to step 2, searched by the next "Find matches"."""
         episode = self.episode
         if not episode or self.app.tasks.busy:
             return
-        episode.reviewed, episode.needs_rescan = False, True
-        if self.keep_selected.get():
-            settings = self.app.panels['videos'].settings()
-            used = {path for path, _ in settings[0]} if settings else set()
-            used |= {c.sample for c in episode.cuts if c.sample}
-            episode.skip_samples = frozenset(used | (episode.skip_samples or set()))
-            episode.cuts = [c for c in episode.cuts if c.enabled or not c.sample]
-            self.cut = None
-            kept = sum(1 for c in episode.cuts if c.sample)
-            note = (f'{kept} ticked cut(s) kept. Only samples added from now on will be searched in it: '
-                    'add one in step 1, then "Find matches" in step 2.')
+        if self._send_back(episode):
+            note = ('ticked cuts kept. Only samples it was never searched with will be used: add one, '
+                    'then "Find matches" in step 2.')
         else:
-            episode.skip_samples = None
             note = 'it will be searched again with every ticked sample by "Find matches" in step 2.'
-        episode.output, episode.junctions = '', []
         self._done_with(episode, f'{episode.name}: {note}')
+
+    def rescan_now(self):
+        """Search this video again right away, then show it again."""
+        episode = self.episode
+        if not episode or self.app.tasks.busy:
+            return
+        videos = self.app.panels['videos']
+        settings = videos.settings()
+        if settings and self.keep_selected.get():
+            used = episode.used_samples()
+            if not [path for path, _ in settings[0] if path not in used]:
+                self.app.report('No new sample for this video: save a cut as a sample, '
+                                'or add one in step 1, then re-scan.')
+                return
+        self._send_back(episode)
+        episode.status = episode.describe()
+        self.app.changed()
+        if videos.scan(only=episode) is False:
+            return
+        self.app.report(f'Searching {episode.name} again…')
+
+    def _send_back(self, episode):
+        """
+        Mark the video for a new search. With "Keep selected samples" (True
+        returned), its ticked cuts are kept, the unticked ones dropped, and the
+        samples it was already searched with are never used on it again: only
+        newer samples are searched, so dropped suggestions cannot come back.
+        Without it, everything is searched again.
+        """
+        episode.reviewed, episode.needs_rescan = False, True
+        episode.output, episode.junctions = '', []
+        if not self.keep_selected.get():
+            episode.skip_samples = None
+            return False
+        episode.skip_samples = episode.used_samples()
+        episode.cuts = [c for c in episode.cuts if c.enabled or not c.sample]
+        self.cut = None
+        return True
+
+    def save_as_sample(self):
+        """Save the selected cut, as adjusted, as a new sample of the current set."""
+        cut, episode = self.cut, self.episode
+        if not cut or not episode or self.app.tasks.busy:
+            return
+        base = os.path.splitext(os.path.basename(cut.sample))[0] if cut.sample else 'cut'
+        name = simpledialog.askstring(
+            'Save as sample', f'Name of the new sample ({cut.end - cut.start:.2f} s, '
+            f'{format_time(cut.start)} – {format_time(cut.end)}):', initialvalue=f'{base}_edited', parent=self)
+        if not name or not name.strip():
+            return
+        samples = self.app.panels['samples']
+        samples.add_sample(episode.path, cut.start, cut.end, name.strip(), saved=lambda _path: self.app.report(
+            f'{os.path.basename(_path)} saved and ticked. "↻ Re-scan now" searches this video with it '
+            '(tick "Keep selected samples" to keep the cuts you already have).'))
 
     def _done_with(self, episode, finished_text):
         """Save the decision, then open the next video still to review."""
@@ -413,7 +457,8 @@ class ReviewPanel(ttk.Frame):
         self.add_button.config(state='normal' if self.episode and not busy else 'disabled')
         more = cut and self.episode and len(self.episode.alternatives(cut)) > 1 and not busy
         self.next_match_button.config(state='normal' if more else 'disabled')
-        for widget in (self.done_button, self.rescan_button, self.keep_check):
+        self.sample_button.config(state='normal' if cut and not busy else 'disabled')
+        for widget in (self.done_button, self.rescan_button, self.rescan_now_button, self.keep_check):
             widget.config(state='normal' if self.episode and not busy else 'disabled')
 
     def toggle_cut(self, cut):

@@ -63,6 +63,7 @@ def save(episode):
         'skip_samples': sorted(episode.skip_samples) if episode.skip_samples else None,
         'cuts': [asdict(cut) for cut in episode.cuts],
         'candidates': [asdict(cut) for cut in episode.candidates],
+        'searched': sorted(episode.searched),
     }
     _write(data)
 
@@ -90,6 +91,7 @@ def restore(episode):
     except (OSError, KeyError, TypeError, ValueError):
         return False
     episode.cuts, episode.candidates, episode.scanned_with = cuts, candidates, SAVED
+    episode.searched = frozenset(entry.get('searched') or ())
     episode.reviewed, episode.needs_rescan, episode.skip_samples = not rescan, rescan, skip
     episode.status = episode.describe()
     return True

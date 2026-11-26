@@ -216,7 +216,11 @@ class VideosPanel(ttk.Frame):
         except ValueError:
             return 1
 
-    def scan(self):
+    def scan(self, only=None):
+        """
+        Search the videos that need it, or only the given one (from the review's
+        "Re-scan now", which then shows it again).
+        """
         settings = self.settings()
         if settings is None:
             messagebox.showwarning('Find matches', 'The threshold, the intro time or the hidden match level is not valid.', parent=self)
@@ -229,7 +233,14 @@ class VideosPanel(ttk.Frame):
             return
         # Never the reviewed videos, those waiting for a new sample, or those
         # already searched with these very samples and settings.
-        episodes = [e for e in self.app.episodes if e.to_search(settings)]
+        if only is not None:
+            if not only.search_samples(settings):
+                messagebox.showinfo('Re-scan', 'There is no new sample to search this video with. '
+                                    'Save a cut as a sample, or add one in step 1.', parent=self)
+                return False
+            episodes = [only]
+        else:
+            episodes = [e for e in self.app.episodes if e.to_search(settings)]
         if not episodes:
             messagebox.showinfo(
                 'Find matches', 'There is nothing to search: every video is reviewed, already searched '
@@ -264,6 +275,7 @@ class VideosPanel(ttk.Frame):
                 episode.scanned_with = None
             else:
                 cuts, candidates = result
+                episode.searched = episode.searched | frozenset(jobs[episode.path][0])
                 episode.candidates = [c for c in episode.candidates if episode.kept(c)] + candidates
                 # Cuts added by hand, and those kept with "Keep selected samples", stay.
                 episode.cuts = sorted([c for c in episode.cuts if not c.sample or episode.kept(c)] + cuts,
@@ -281,8 +293,11 @@ class VideosPanel(ttk.Frame):
                 messagebox.showerror(
                     'Some scans failed',
                     '\n\n'.join(f'{e.name}: {e.error[-400:]}' for e in failures[:4]), parent=self)
-            if not cancelled:
-                self.app.show('review')
+            if cancelled:
+                return
+            self.app.show('review')
+            if only is not None and not only.error:
+                self.app.panels['review'].show_episode(only)
 
         self.app.run('Searching', episodes, work, self.worker_count(), finished, done)
         self.app.changed()

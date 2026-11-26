@@ -54,6 +54,24 @@ python app_extract.py
 
 The player is on the left, the four steps are tabs on the right.
 
+### Sessions
+
+Everything in progress is a **session**: the videos with their cuts, what you
+validated or sent back, the sample set and which samples are ticked, and the
+search and export settings. It is saved as you work ("saved ✓" at the top)
+and reopened when the app starts, so reviewed videos stay reviewed until you
+decide otherwise (Unreview, Remove or Clear in step 2, or deleting the
+session).
+
+The bar above the steps switches between sessions (say one per series or per
+season). **New…** starts an empty one with the same samples and settings,
+**Rename…** and **Delete…** act on the open one. Deleting a session never
+touches a video or a sample.
+
+When a session opens, a video whose file is gone is left out, and one whose
+file changed (size or date) comes back without its cuts, to be searched
+again.
+
 ### 1. Samples
 
 Open an episode, find the passage to remove and mark it: `I` at its start,
@@ -84,6 +102,9 @@ overlapping, with the highest total score. So when the intro tune is also
 played inside the outro, the intro sample cannot take the copy inside the
 outro, even if it scores a little higher there, because the outro would then
 be left with a poor match.
+
+Matches of 98 % or more all count as perfect: when two samples overlap and
+both match that well, the **longest** one is cut, since it removes more.
 
 The list is split in two: videos **to review**, and videos already
 **reviewed**. "Find matches" only searches the videos that need it: never the
@@ -117,20 +138,26 @@ unticked, and overlapping ticked cuts are flagged.
 - "▶ What is removed" plays the cut, "▶ Result at this cut" plays across the
   junction as it will be.
 - "+ Add cut at playhead" adds a cut by hand.
-Then decide, and the next video opens:
+- **Save as sample…** saves the selected cut, as you adjusted it, as a new
+  sample of the current set (ticked), for example a longer outro.
+Then decide:
 
 - **✓ Validate, reviewed**: the cuts are right. The video is saved with its
   cuts: add the same file again, even after restarting the app, and it comes
   back reviewed.
-- **↻ Needs re-scan**: the video goes back to step 2, to be searched again by
-  the next "Find matches". Cuts you added by hand are kept.
-  With **Keep selected samples** ticked, the ticked cuts are kept as they
-  are, the unticked ones are dropped, and the samples this video was searched
-  with are never used on it again. So the next search only uses samples you
-  add afterwards (in step 1), it cannot bring back the suggestions you
-  dropped, and its new matches never overlap the kept cuts. Until there is a
-  new sample, the video waits ("Waits for new samples"). This choice is saved
-  too.
+- **↻ Re-scan now**: searches this video again right away, with the samples
+  ticked now (including one you just saved from the review), and shows it
+  again.
+- **Needs re-scan**: the video goes back to step 2, to be searched again by
+  the next "Find matches", and the next video opens. Cuts you added by hand
+  are kept.
+
+For both, with **Keep selected samples** ticked, the ticked cuts are kept as they
+are, the unticked ones are dropped, and the samples this video was already
+searched with are never used on it again. So the search only uses newer
+samples, it cannot bring back the suggestions you dropped, and its new
+matches never overlap the kept cuts. Until there is a new sample, a video
+sent back waits ("Waits for new samples").
 
 | Key | Action |
 |---|---|
@@ -204,8 +231,10 @@ the "match %" shown in the app: below 50 % a match counts as doubtful.
 All matches of all samples are considered together. The program keeps, for
 each sample, at most one match, so that no two kept matches overlap and the
 sum of their scores is the highest (an exact search, since there are only a
-few candidates). Matches that touch by less than a second are trimmed instead
-of being rejected. With "several times per video", more matches are then
+few candidates). Scores of 98 % or more count as equal, and between equal
+totals the set covering more time wins, so the longest of two near-perfect
+overlapping samples is cut. Matches that touch by less than a second are
+trimmed instead of being rejected. With "several times per video", more matches are then
 added wherever they overlap nothing.
 
 ### Cutting
@@ -257,7 +286,8 @@ All next to the program, and not part of the repository:
 | Path | What |
 |---|---|
 | `refs/<set>/*.wav` | your samples, one folder per set |
-| `reviews.json` | the videos you validated or sent back for a new search, with their cuts. An entry only applies while the file keeps the same size and date |
+| `sessions/<name>.json` | each session: videos, cuts, review state, samples ticked, settings |
+| `reviews.json` | the videos you validated or sent back, in any session: adding the same file again, even in another session, brings its review back. An entry only applies while the file keeps the same size and date |
 
 ## Project layout
 
@@ -273,6 +303,7 @@ All next to the program, and not part of the repository:
 | `gui/app.py` | the main window |
 | `gui/samples.py`, `gui/videos.py`, `gui/review.py`, `gui/export.py` | the four steps |
 | `gui/player.py`, `gui/stills.py` | the VLC player and the exact frame shown when paused |
+| `gui/sessions.py` | saving and opening sessions |
 | `gui/reviews.py` | the reviews kept in `reviews.json` |
 | `gui/tasks.py`, `gui/state.py`, `gui/common.py` | background work, shared state, look and helpers |
 

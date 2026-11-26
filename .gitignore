@@ -7,3 +7,4 @@ venv/
 # Your own data, kept next to the program
 refs/
 reviews.json
+sessions/

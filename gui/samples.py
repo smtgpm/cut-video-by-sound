@@ -227,7 +227,11 @@ class SamplesPanel(ttk.Frame):
         except ValueError as exc:
             messagebox.showwarning('Save sample', str(exc), parent=self)
             return
-        video, folder, name = self.video, self.folder, self.name.get()
+        self.add_sample(self.video, start, end, self.name.get())
+
+    def add_sample(self, video, start, end, name, saved=None):
+        """Save [start, end) of the video as a sample of the current set, ticked."""
+        folder = self.folder
 
         def work(_item, _progress, _log, _cancelled):
             return save_sample(video, start, end, folder, name)
@@ -235,9 +239,12 @@ class SamplesPanel(ttk.Frame):
         def finished(_item, path, error):
             if error:
                 messagebox.showerror('Save sample', str(error), parent=self)
-            else:
-                self.refresh_sets(folder)
-                self.app.report(f'Saved {os.path.basename(path)} ({end - start:.2f} s).')
+                return
+            self.refresh_sets(folder)
+            self.app.report(f'Saved {os.path.basename(path)} ({end - start:.2f} s) '
+                            f'in the sample set "{os.path.basename(folder)}".')
+            if saved:
+                saved(path)
 
         self.app.run('Saving sample', [video], work, 1, finished)
 

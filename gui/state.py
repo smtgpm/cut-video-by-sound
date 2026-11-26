@@ -27,6 +27,7 @@ class Episode:
     # Every place each sample was heard, from the last search: the review can
     # move a cut to its sample's next best match.
     candidates: List[Cut] = field(default_factory=list)
+    searched: frozenset = frozenset()  # every sample this video has been searched with
     status: str = 'Not scanned'
     error: str = ''
     output: str = ''
@@ -49,6 +50,14 @@ class Episode:
         """The ticked samples this video is searched with (not the skipped ones)."""
         skip = self.skip_samples or ()
         return [path for path, _ in settings[0] if path not in skip] if settings else []
+
+    def used_samples(self) -> frozenset:
+        """The samples already searched in this video, as far as is known."""
+        used = set(self.searched) | set(self.skip_samples or ())
+        used |= {c.sample for c in self.cuts + self.candidates if c.sample}
+        if isinstance(self.scanned_with, tuple):
+            used |= {path for path, _ in self.scanned_with[0]}
+        return frozenset(used)
 
     def kept(self, cut) -> bool:
         """A match kept with "Keep selected samples": a new search leaves it alone."""

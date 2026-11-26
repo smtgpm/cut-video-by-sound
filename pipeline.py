@@ -30,6 +30,9 @@ MIN_MATCH = 0.25  # seconds left after trimming an edge overlap
 # shorter one is then trimmed so that they only meet.
 EDGE_OVERLAP = 1.0
 MAX_CANDIDATES = 8  # best matches per sample considered when choosing the cuts
+# Scores at or above this all count as a perfect copy when choosing cuts, so
+# between overlapping samples that both match this well, the longest one wins.
+PERFECT_MATCH = 0.98
 
 
 @dataclass
@@ -233,9 +236,16 @@ def choose_cuts(matches: list, sample: Callable[[object], str], score: Callable[
     its tune inside the outro, even when that copy scores higher than the real
     intro: the outro sample then has nowhere good left to go, so the right
     pairing (intro on the intro, outro on the outro) has the higher total.
-    Ties go to the set covering more time. Unless one_per_sample, further
-    matches are then added, best first, wherever they overlap nothing.
+    Ties go to the set covering more time. Scores of PERFECT_MATCH or more
+    count as equal, so when two samples overlap and both match that well, the
+    longer one is cut. Unless one_per_sample, further matches are then added,
+    best first, wherever they overlap nothing.
     """
+    raw_score = score
+
+    def score(match):
+        return min(raw_score(match), PERFECT_MATCH)
+
     def better(a, b):
         return (round(a[0], 9), a[1]) > (round(b[0], 9), b[1])
 
